@@ -121,6 +121,15 @@ function initSchema(db: Database.Database) {
       sprint_name TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS status_reports (
+      id TEXT PRIMARY KEY,
+      generated_at TEXT,
+      audience TEXT,
+      sprint_name TEXT,
+      content TEXT,
+      is_auto INTEGER DEFAULT 0
+    );
+
     CREATE TABLE IF NOT EXISTS app_config (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -144,7 +153,22 @@ function initSchema(db: Database.Database) {
       sprint_length_weeks INTEGER DEFAULT 2,
       updated_at TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS report_schedule (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      enabled INTEGER DEFAULT 0,
+      day_of_week TEXT DEFAULT 'Friday',
+      time TEXT DEFAULT '09:00',
+      audience TEXT DEFAULT 'executive',
+      last_run_at TEXT,
+      next_run_at TEXT
+    );
   `);
+
+    const statusReportColumns = db.prepare(`PRAGMA table_info(status_reports)`).all() as { name: string }[];
+    if (!statusReportColumns.some((column) => column.name === 'is_auto')) {
+        db.exec(`ALTER TABLE status_reports ADD COLUMN is_auto INTEGER DEFAULT 0`);
+    }
 
     // Backfill epics table for existing databases created before epics persistence.
     db.exec(`

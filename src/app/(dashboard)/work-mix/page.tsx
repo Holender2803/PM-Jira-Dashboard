@@ -3,6 +3,7 @@ import { useMemo } from 'react';
 import { useFilteredIssues, useAppStore } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import { StatCard } from '@/components/ui/Badges';
+import PmGuideTooltip from '@/components/PmGuideTooltip';
 import { calculateWorkMixMetrics, WorkMixBucket } from '@/lib/analytics';
 import {
     ResponsiveContainer,
@@ -69,7 +70,16 @@ export default function WorkMixPage() {
                 <div className="dashboard-grid grid-4">
                     <StatCard label="Total Tickets" value={metrics.total} color="#6366f1" />
                     <StatCard label="Total Story Points" value={totalPoints} color="#8b5cf6" />
-                    <StatCard label="Bug : Feature Ratio" value={metrics.bugToFeatureRatio.toFixed(2)} color="#ef4444" />
+                    <StatCard
+                        label={
+                            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                Bug : Feature Ratio
+                                <PmGuideTooltip metric="bug_ratio" />
+                            </span>
+                        }
+                        value={metrics.bugToFeatureRatio.toFixed(2)}
+                        color="#ef4444"
+                    />
                     <StatCard label="Dev Request Share" value={`${Math.round(metrics.developerRequestRatio * 100)}%`} color="#ec4899" />
                 </div>
 

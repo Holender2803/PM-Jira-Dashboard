@@ -3,6 +3,7 @@
 import { ExternalLink, Info, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import { ReopenRateMetrics } from '@/lib/analytics';
 import IssueKeyButton from '@/components/tables/IssueKeyButton';
+import PmGuideTooltip from '@/components/PmGuideTooltip';
 
 interface ReopenRateCardProps {
     data: ReopenRateMetrics;
@@ -28,7 +29,10 @@ export default function ReopenRateCard({ data }: ReopenRateCardProps) {
         <div className="card" style={{ padding: '14px 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.4px', fontWeight: 600 }}>
-                    Re-open Rate
+                    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                        Re-open Rate
+                        <PmGuideTooltip metric="reopen_rate" />
+                    </span>
                 </div>
                 <span
                     title={data.methodology}

@@ -7,6 +7,7 @@ import { PriorityBadge, StatCard, ProgressBar, StatusBadge } from '@/components/
 import FilterBar from '@/components/filters/FilterBar';
 import IssueTable from '@/components/tables/IssueTable';
 import IssueKeyButton from '@/components/tables/IssueKeyButton';
+import PmGuideTooltip from '@/components/PmGuideTooltip';
 import { SprintProgressChart, AssigneeChart } from '@/components/charts/DashboardCharts';
 import VelocityChart from '@/components/charts/VelocityChart';
 import BurndownMiniChart, { BurndownMiniPoint } from '@/components/charts/BurndownMiniChart';
@@ -502,14 +503,19 @@ export default function SprintPage() {
                         onClick={() => openSprintTicketModal('Story Points Done Tickets', done)}
                     />
                     <StatCard
-                        label="Carry-over Risk"
+                        label={
+                            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                Carry-over Risk
+                                <PmGuideTooltip metric="carry_over" />
+                            </span>
+                        }
                         value={carryOverRiskCount}
                         color={blocked.length > 0 ? '#ef4444' : '#64748b'}
                         onClick={() => openSprintTicketModal('Carry-over Risk Tickets', carryOverRiskIssues)}
                     />
                 </div>
 
-                <VelocityChart data={velocityTrend} />
+                <VelocityChart data={velocityTrend} titleAddon={<PmGuideTooltip metric="velocity" />} />
                 <BurndownMiniChart
                     data={burndown.points}
                     hasData={burndown.hasData}

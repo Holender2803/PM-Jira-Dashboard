@@ -4,9 +4,9 @@ import { useAppStore } from '@/store/app-store';
 import {
     LayoutDashboard, Zap, PieChart, GitBranch, Bug,
     Clock, Ticket, Sparkles, Settings, Bookmark,
-    RefreshCw, ChevronLeft, ChevronRight, Database, CircleHelp, Layers
+    RefreshCw, ChevronLeft, ChevronRight, Database, CircleHelp, Layers, BarChart3
 } from 'lucide-react';
-import { useState } from 'react';
+import { CSSProperties, useState } from 'react';
 import { formatTimeForDisplay } from '@/lib/time';
 
 const NAV_ITEMS = [
@@ -20,6 +20,7 @@ const NAV_ITEMS = [
     { href: '/epics', label: 'Epics', icon: Layers },
     { href: '/tickets', label: 'Tickets', icon: Database },
     { href: '/ai-reports', label: 'AI Reports', icon: Sparkles },
+    { href: '/slideshow', label: '📊 Slideshow', icon: BarChart3 },
     { href: '/info', label: 'Info', icon: CircleHelp },
 ];
 
@@ -31,8 +32,31 @@ interface SidebarProps {
 export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
-    const { lastSynced, totalIssues, demoMode, sidebarOpen, setSidebarOpen, savedViews, applyView } = useAppStore();
+    const {
+        lastSynced,
+        totalIssues,
+        demoMode,
+        sidebarOpen,
+        setSidebarOpen,
+        savedViews,
+        applyView,
+        isPmGuideEnabled,
+        togglePmGuide,
+    } = useAppStore();
     const [showViews, setShowViews] = useState(false);
+    const pmGuideTitle = isPmGuideEnabled ? 'PM Guide ON' : 'PM Guide OFF';
+    const pmGuideButtonStyle: CSSProperties = isPmGuideEnabled
+        ? {
+            background: 'rgba(245,158,11,0.2)',
+            border: '1px solid rgba(245,158,11,0.55)',
+            color: '#fbbf24',
+            boxShadow: '0 0 0 1px rgba(245,158,11,0.22), 0 0 14px rgba(245,158,11,0.25)',
+        }
+        : {
+            background: 'var(--bg-elevated)',
+            border: '1px solid var(--border)',
+            color: 'var(--text-muted)',
+        };
 
     return (
         <div className="sidebar" style={{ width: sidebarOpen ? 240 : 64, transition: 'width 0.25s ease', minWidth: 0 }}>
@@ -133,6 +157,17 @@ export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
                                 <RefreshCw size={12} style={{ animation: syncing ? 'spin 1s linear infinite' : 'none' }} />
                                 {syncing ? 'Syncing…' : 'Refresh'}
                             </button>
+                            <button
+                                type="button"
+                                className="btn btn-sm"
+                                onClick={togglePmGuide}
+                                title={pmGuideTitle}
+                                aria-label={pmGuideTitle}
+                                aria-pressed={isPmGuideEnabled}
+                                style={{ padding: '6px 8px', ...pmGuideButtonStyle }}
+                            >
+                                🎓
+                            </button>
                             <a href="/settings" className="btn btn-ghost btn-sm" style={{ padding: 6 }}>
                                 <Settings size={14} />
                             </a>
@@ -143,6 +178,17 @@ export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
                         <button className="btn btn-ghost btn-sm" onClick={onRefresh} title="Refresh" style={{ padding: 6 }}>
                             <RefreshCw size={14} />
+                        </button>
+                        <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={togglePmGuide}
+                            title={pmGuideTitle}
+                            aria-label={pmGuideTitle}
+                            aria-pressed={isPmGuideEnabled}
+                            style={{ padding: 6, ...pmGuideButtonStyle }}
+                        >
+                            🎓
                         </button>
                         <a href="/settings" className="btn btn-ghost btn-sm" title="Settings" style={{ padding: 6 }}>
                             <Settings size={14} />

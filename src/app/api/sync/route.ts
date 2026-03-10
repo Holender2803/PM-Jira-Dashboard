@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { fetchAllIssues, testConnection, DEFAULT_JQL } from '@/lib/jira-client';
 import { upsertIssues } from '@/lib/issue-store';
 import getDb from '@/lib/db';
+import { runScheduledStatusReportIfDue } from '@/lib/report-schedule';
 
 function formatJqlDate(date: Date): string {
     const year = date.getUTCFullYear();
@@ -104,12 +105,38 @@ export async function POST(request: Request) {
                 `UPDATE sync_log SET completed_at = datetime('now'), issues_synced = ?, status = 'done' WHERE id = ?`
             ).run(synced, syncId);
 
+            let scheduledReport: {
+                triggered: boolean;
+                id?: string;
+                audience?: string;
+                error?: string;
+            } | null = null;
+
+            try {
+                const scheduledResult = await runScheduledStatusReportIfDue();
+                if (scheduledResult.triggered && scheduledResult.report) {
+                    scheduledReport = {
+                        triggered: true,
+                        id: scheduledResult.report.id,
+                        audience: scheduledResult.report.audience,
+                    };
+                } else {
+                    scheduledReport = { triggered: false };
+                }
+            } catch (scheduleError) {
+                scheduledReport = {
+                    triggered: false,
+                    error: String(scheduleError),
+                };
+            }
+
             return NextResponse.json({
                 ok: true,
                 synced,
                 total: totalFound,
                 incremental: Boolean(incremental),
                 completedAt: new Date().toISOString(),
+                scheduledReport,
             });
         } catch (fetchError) {
             db.prepare(
