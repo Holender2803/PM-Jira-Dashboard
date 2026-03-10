@@ -18,7 +18,7 @@ async function fetchSavedViews() {
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const {
         setIssues, setLoading, setLastSynced, setTotalIssues,
-        setDemoMode, setActiveSprints, setSavedViews, demoMode,
+        setDemoMode, setActiveSprints, setSavedViews, demoMode, sidebarHidden,
     } = useAppStore();
     const [syncing, setSyncing] = useState(false);
 
@@ -68,7 +68,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
     return (
         <div className="layout">
-            <Sidebar onRefresh={handleRefresh} syncing={syncing} />
+            {!sidebarHidden && <Sidebar onRefresh={handleRefresh} syncing={syncing} />}
             <div className="main-content">
                 {children}
             </div>

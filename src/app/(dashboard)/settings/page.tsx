@@ -13,12 +13,32 @@ type ConnectionState = {
     error?: string;
 };
 
+type ReportScheduleAudience = 'team' | 'executive' | 'client';
+
+interface ReportScheduleConfig {
+    enabled: boolean;
+    dayOfWeek: string;
+    time: string;
+    audience: ReportScheduleAudience;
+    lastRunAt: string | null;
+    nextRunAt: string | null;
+}
+
 const LOCAL_STORAGE_KEY = 'jira_dashboard_manual_credentials';
 const USD_FORMATTER = new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: 0,
 });
+const DEFAULT_REPORT_SCHEDULE: ReportScheduleConfig = {
+    enabled: false,
+    dayOfWeek: 'Friday',
+    time: '09:00',
+    audience: 'executive',
+    lastRunAt: null,
+    nextRunAt: null,
+};
+const REPORT_WEEK_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function toPositiveInteger(value: number, fallback: number): number {
     if (!Number.isFinite(value)) return fallback;
@@ -59,6 +79,15 @@ export default function SettingsPage() {
     const [teamConfigBusy, setTeamConfigBusy] = useState(false);
     const [teamConfigResult, setTeamConfigResult] = useState<string | null>(null);
     const [teamConfigToast, setTeamConfigToast] = useState<string | null>(null);
+
+    const [reportScheduleEnabled, setReportScheduleEnabled] = useState(DEFAULT_REPORT_SCHEDULE.enabled);
+    const [reportScheduleDayOfWeek, setReportScheduleDayOfWeek] = useState(DEFAULT_REPORT_SCHEDULE.dayOfWeek);
+    const [reportScheduleTime, setReportScheduleTime] = useState(DEFAULT_REPORT_SCHEDULE.time);
+    const [reportScheduleAudience, setReportScheduleAudience] = useState<ReportScheduleAudience>(DEFAULT_REPORT_SCHEDULE.audience);
+    const [reportScheduleLastRunAt, setReportScheduleLastRunAt] = useState<string | null>(DEFAULT_REPORT_SCHEDULE.lastRunAt);
+    const [reportScheduleNextRunAt, setReportScheduleNextRunAt] = useState<string | null>(DEFAULT_REPORT_SCHEDULE.nextRunAt);
+    const [reportScheduleBusy, setReportScheduleBusy] = useState(false);
+    const [reportScheduleResult, setReportScheduleResult] = useState<string | null>(null);
 
     useEffect(() => {
         setHydrated(true);
@@ -125,9 +154,31 @@ export default function SettingsPage() {
             }
         };
 
+        const loadReportSchedule = async () => {
+            try {
+                const res = await fetch('/api/report-schedule', { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json() as ReportScheduleConfig;
+
+                setReportScheduleEnabled(Boolean(data.enabled));
+                setReportScheduleDayOfWeek(data.dayOfWeek || DEFAULT_REPORT_SCHEDULE.dayOfWeek);
+                setReportScheduleTime(data.time || DEFAULT_REPORT_SCHEDULE.time);
+                setReportScheduleAudience(
+                    data.audience === 'team' || data.audience === 'client' || data.audience === 'executive'
+                        ? data.audience
+                        : DEFAULT_REPORT_SCHEDULE.audience
+                );
+                setReportScheduleLastRunAt(data.lastRunAt || null);
+                setReportScheduleNextRunAt(data.nextRunAt || null);
+            } catch {
+                // Keep defaults when schedule config is unavailable.
+            }
+        };
+
         load();
         loadBugTrackingConfig();
         loadTeamConfig();
+        loadReportSchedule();
 
         const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (stored) {
@@ -337,6 +388,58 @@ export default function SettingsPage() {
         }
     };
 
+    const saveReportSchedule = async () => {
+        setReportScheduleBusy(true);
+        setReportScheduleResult(null);
+
+        try {
+            const response = await fetch('/api/report-schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    enabled: reportScheduleEnabled,
+                    dayOfWeek: reportScheduleDayOfWeek,
+                    time: reportScheduleTime,
+                    audience: reportScheduleAudience,
+                }),
+            });
+
+            const data = await response.json() as {
+                error?: string;
+                schedule?: ReportScheduleConfig;
+            };
+
+            if (!response.ok || !data.schedule) {
+                setReportScheduleResult(`Save failed: ${data.error || 'Unknown error'}`);
+                return;
+            }
+
+            const schedule = data.schedule;
+            setReportScheduleEnabled(Boolean(schedule.enabled));
+            setReportScheduleDayOfWeek(schedule.dayOfWeek || DEFAULT_REPORT_SCHEDULE.dayOfWeek);
+            setReportScheduleTime(schedule.time || DEFAULT_REPORT_SCHEDULE.time);
+            setReportScheduleAudience(
+                schedule.audience === 'team' || schedule.audience === 'client' || schedule.audience === 'executive'
+                    ? schedule.audience
+                    : DEFAULT_REPORT_SCHEDULE.audience
+            );
+            setReportScheduleLastRunAt(schedule.lastRunAt || null);
+            setReportScheduleNextRunAt(schedule.nextRunAt || null);
+            setReportScheduleResult('Scheduled report settings saved.');
+        } catch (error) {
+            setReportScheduleResult(`Save failed: ${String(error)}`);
+        } finally {
+            setReportScheduleBusy(false);
+        }
+    };
+
+    const scheduleLastRunLabel = reportScheduleLastRunAt
+        ? new Date(reportScheduleLastRunAt).toLocaleString()
+        : 'Not run yet';
+    const scheduleNextRunLabel = reportScheduleNextRunAt
+        ? new Date(reportScheduleNextRunAt).toLocaleString()
+        : 'Not scheduled';
+
     return (
         <div>
             <div className="page-header" style={{ paddingBottom: 20 }}>
@@ -525,6 +628,89 @@ export default function SettingsPage() {
                             {teamConfigResult}
                         </div>
                     )}
+                </div>
+
+                <div id="scheduled-reports" className="card" style={{ scrollMarginTop: 90 }}>
+                    <div className="chart-title" style={{ marginBottom: 10 }}>📅 Scheduled Reports</div>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                        Configure automatic weekly status report generation during sync refresh.
+                    </p>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
+                            <input
+                                type="checkbox"
+                                checked={reportScheduleEnabled}
+                                onChange={(event) => setReportScheduleEnabled(event.target.checked)}
+                                style={{ accentColor: 'var(--accent)' }}
+                            />
+                            Enable weekly report
+                        </label>
+
+                        <div className="dashboard-grid grid-3">
+                            <div>
+                                <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                    Day of week
+                                </label>
+                                <select
+                                    className="input"
+                                    value={reportScheduleDayOfWeek}
+                                    onChange={(event) => setReportScheduleDayOfWeek(event.target.value)}
+                                    disabled={!reportScheduleEnabled}
+                                >
+                                    {REPORT_WEEK_DAYS.map((day) => (
+                                        <option key={day} value={day}>{day}</option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                    Time
+                                </label>
+                                <input
+                                    className="input"
+                                    type="time"
+                                    value={reportScheduleTime}
+                                    onChange={(event) => setReportScheduleTime(event.target.value || DEFAULT_REPORT_SCHEDULE.time)}
+                                    disabled={!reportScheduleEnabled}
+                                />
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                    Default audience
+                                </label>
+                                <select
+                                    className="input"
+                                    value={reportScheduleAudience}
+                                    onChange={(event) => setReportScheduleAudience(event.target.value as ReportScheduleAudience)}
+                                    disabled={!reportScheduleEnabled}
+                                >
+                                    <option value="team">Team</option>
+                                    <option value="executive">Executive</option>
+                                    <option value="client">Client</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' }}>
+                            <div>Last run: {scheduleLastRunLabel}</div>
+                            <div>Next run: {scheduleNextRunLabel}</div>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <button className="btn btn-primary btn-sm" onClick={saveReportSchedule} disabled={reportScheduleBusy}>
+                                {reportScheduleBusy ? 'Saving...' : 'Save Scheduled Reports'}
+                            </button>
+                        </div>
+
+                        {reportScheduleResult && (
+                            <div style={{ fontSize: 12, color: reportScheduleResult.startsWith('Save failed') ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                                {reportScheduleResult}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div id="bug-tracking" className="card" style={{ scrollMarginTop: 90 }}>

@@ -129,7 +129,7 @@ export function Avatar({ name, size = 28 }: AvatarProps) {
 }
 
 interface StatCardProps {
-    label: string;
+    label: React.ReactNode;
     value: number | string;
     change?: number;
     color?: string;

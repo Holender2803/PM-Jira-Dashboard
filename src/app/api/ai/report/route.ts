@@ -15,6 +15,7 @@ const REPORT_PROMPTS: Record<string, string> = {
     release_notes: 'Write release notes for the completed and release-ready tickets. Group by feature area. Write for a technical but non-developer audience.',
     blockers_summary: 'Summarize all blockers and at-risk items. For each, describe what\'s blocked and suggest possible actions.',
     selected_tickets: 'Generate a concise summary of the selected tickets. Include: status, key achievements, current risks, what\'s still in progress, and suggested PM talking points.',
+    slide_speaker_notes: 'Write concise presenter notes for a PM slideshow slide. Keep it practical, audience-aware, and action-oriented.',
     morning_briefing: `You are a PM assistant. Write ONLY 3 sentences.
 No headers. No bullet points. No numbered lists. No sections.
 No markdown. Plain conversational sentences only.
@@ -38,6 +39,7 @@ Output the 3 sentences and nothing else.`,
 
 const MAX_TOKENS: Record<string, number> = {
     morning_briefing: 150,
+    slide_speaker_notes: 100,
 };
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
@@ -278,6 +280,10 @@ function generateMockReport(type: string, tone: string, issues: JiraIssue[], spr
     if (type === 'blockers_summary') {
         const blockedIssues = issues.filter(i => i.status === 'Blocked');
         return `## Blockers Summary — ${sprint}\n\n${blockedIssues.length === 0 ? '✅ No blocked tickets currently.' : blockedIssues.map(i => `### 🚧 [${i.key}] ${i.summary}\n- **Assignee:** ${i.assignee?.displayName || 'Unassigned'}\n- **Blocked for:** ${i.timeInCurrentStatus} days\n- **Recommended action:** Review with ${i.assignee?.displayName || 'assignee'} and escalate dependencies`).join('\n\n')}`;
+    }
+
+    if (type === 'slide_speaker_notes') {
+        return `Highlight sprint progress in one line, name the top risk clearly, and end with one concrete next action for this audience.`;
     }
 
     // Default: sprint summary

@@ -11,17 +11,22 @@ import {
     XAxis,
     YAxis,
 } from 'recharts';
+import type { ReactNode } from 'react';
 import { VelocityTrendPoint } from '@/lib/analytics';
 
 interface VelocityChartProps {
     data: VelocityTrendPoint[];
+    titleAddon?: ReactNode;
 }
 
-export default function VelocityChart({ data }: VelocityChartProps) {
+export default function VelocityChart({ data, titleAddon }: VelocityChartProps) {
     if (data.length === 0) {
         return (
             <div className="chart-container">
-                <div className="chart-title">Velocity Trend</div>
+                <div className="chart-title" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                    Velocity Trend
+                    {titleAddon}
+                </div>
                 <div
                     style={{
                         minHeight: 220,
@@ -41,7 +46,10 @@ export default function VelocityChart({ data }: VelocityChartProps) {
 
     return (
         <div className="chart-container">
-            <div className="chart-title">Velocity Trend (Completed Story Points)</div>
+            <div className="chart-title" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                Velocity Trend (Completed Story Points)
+                {titleAddon}
+            </div>
             <ResponsiveContainer width="100%" height={280}>
                 <ComposedChart data={data} margin={{ top: 8, right: 12, left: 0, bottom: 8 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />

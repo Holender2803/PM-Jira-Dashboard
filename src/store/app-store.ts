@@ -34,8 +34,10 @@ interface AppState {
 
     // UI
     sidebarOpen: boolean;
+    sidebarHidden: boolean;
     theme: 'dark' | 'light';
     storyPointsWarningDismissed: boolean;
+    isPmGuideEnabled: boolean;
 
     // AI Reports
     aiReports: AIReportResponse[];
@@ -53,7 +55,9 @@ interface AppState {
     toggleSelected: (key: string) => void;
     clearSelection: () => void;
     setSidebarOpen: (v: boolean) => void;
+    setSidebarHidden: (v: boolean) => void;
     setTheme: (t: 'dark' | 'light') => void;
+    togglePmGuide: () => void;
     dismissStoryPointsWarning: () => void;
     resetStoryPointsWarning: () => void;
     addAIReport: (r: AIReportResponse) => void;
@@ -76,8 +80,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     activeSprints: [],
     selectedKeys: new Set(),
     sidebarOpen: true,
+    sidebarHidden: false,
     theme: 'dark',
     storyPointsWarningDismissed: false,
+    isPmGuideEnabled: false,
     aiReports: [],
     savedViews: [],
 
@@ -123,7 +129,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     },
     clearSelection: () => set({ selectedKeys: new Set() }),
     setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
+    setSidebarHidden: (sidebarHidden) => set({ sidebarHidden }),
     setTheme: (theme) => set({ theme }),
+    togglePmGuide: () =>
+        set((state) => ({ isPmGuideEnabled: !state.isPmGuideEnabled })),
     dismissStoryPointsWarning: () => set({ storyPointsWarningDismissed: true }),
     resetStoryPointsWarning: () => set({ storyPointsWarningDismissed: false }),
     addAIReport: (r) => set(s => ({ aiReports: [r, ...s.aiReports] })),

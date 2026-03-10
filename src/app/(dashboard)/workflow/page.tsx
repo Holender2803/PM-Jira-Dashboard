@@ -3,6 +3,7 @@ import { CSSProperties, useMemo, useState } from 'react';
 import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import { StatCard, StatusBadge } from '@/components/ui/Badges';
+import PmGuideTooltip from '@/components/PmGuideTooltip';
 import IssueTable from '@/components/tables/IssueTable';
 import IssueKeyButton from '@/components/tables/IssueKeyButton';
 import {
@@ -199,7 +200,12 @@ export default function WorkflowPage() {
                     <StatCard label="Blocked" value={metrics.blockedAging.length} color="#ef4444" />
                     <StatCard label="Reopens" value={metrics.reopenTotal} color="#f59e0b" />
                     <StatCard
-                        label="Bounce Back Tickets"
+                        label={
+                            <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                Bounce Back Tickets
+                                <PmGuideTooltip metric="bounce_rate" />
+                            </span>
+                        }
                         value={`${bounceBackTicketCount} tickets (${bounceRatePercent}%)`}
                         color={bounceRateTheme.accent}
                         style={{
@@ -442,6 +448,16 @@ export default function WorkflowPage() {
 
                             {showTimeDistribution && (
                                 <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                                    <div>
+                                        <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)', display: 'inline-flex', alignItems: 'center' }}>
+                                            Cycle Time Distribution
+                                            <PmGuideTooltip metric="cycle_time" />
+                                        </div>
+                                        <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                            Current view: {timeMode === 'cycle' ? 'Cycle Time' : 'Lead Time'}
+                                        </div>
+                                    </div>
+
                                     <div
                                         style={{
                                             display: 'flex',

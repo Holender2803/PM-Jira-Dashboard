@@ -9,6 +9,7 @@ import {
 } from '@/components/charts/DashboardCharts';
 import IssueTable from '@/components/tables/IssueTable';
 import IssueKeyButton from '@/components/tables/IssueKeyButton';
+import PmGuideTooltip from '@/components/PmGuideTooltip';
 import { CheckCircle, AlertTriangle, TrendingUp, Zap, Bug, Clock, Layers, RefreshCw, Minimize2, Maximize2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { formatTimeForDisplay } from '@/lib/time';
@@ -464,7 +465,12 @@ No lists, no headers, plain sentences only.
                         <div className="dashboard-grid grid-4">
                             <StatCard label="Committed" value={sprintIssues.length} color="#6366f1" icon={<Layers size={16} />} onClick={() => router.push('/sprint')} />
                             <StatCard
-                                label="Carry-over Risk"
+                                label={
+                                    <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                        Carry-over Risk
+                                        <PmGuideTooltip metric="carry_over" />
+                                    </span>
+                                }
                                 value={carryOverRisk}
                                 color={carryOverCardColor}
                                 icon={carryOverRisk > 0 ? <AlertTriangle size={16} /> : <CheckCircle size={16} />}
