@@ -9,6 +9,7 @@ import {
 import IssueTable from '@/components/tables/IssueTable';
 import { CheckCircle, AlertTriangle, TrendingUp, Zap, Bug, Clock, Layers } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { formatTimeForDisplay } from '@/lib/time';
 
 export default function OverviewPage() {
     const { issues, isLoading, demoMode, lastSynced } = useAppStore();
@@ -65,7 +66,7 @@ export default function OverviewPage() {
                         <h1 className="page-title">📊 PM Overview</h1>
                         <p className="page-subtitle">
                             {activeSprint ? `${activeSprint.name} · ` : ''}{sprintIssues.length} sprint tickets
-                            {lastSynced && <span style={{ marginLeft: 8, opacity: 0.6 }}>· Updated {new Date(lastSynced).toLocaleTimeString()}</span>}
+                            {lastSynced && <span style={{ marginLeft: 8, opacity: 0.6 }}>· Updated {formatTimeForDisplay(lastSynced, { includeZone: true })}</span>}
                         </p>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
