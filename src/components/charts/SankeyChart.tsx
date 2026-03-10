@@ -8,7 +8,7 @@ import {
     getStageIndexByGroup,
     normalizeWorkflowGroupFilter,
     WORKFLOW_GROUP_ORDER,
-} from '@/lib/workflow-groups';
+} from '@/lib/statusGroups';
 
 interface SankeyChartProps {
     flow: StatusTransitionFlow;

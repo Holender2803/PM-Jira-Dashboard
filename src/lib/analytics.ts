@@ -125,6 +125,42 @@ export function getIssuesForSprint(issues: JiraIssue[], sprint: Sprint | null): 
     return issues.filter((issue) => issue.sprint?.id === sprint.id);
 }
 
+export interface StoryPointsCoverage {
+    coveredCount: number;
+    totalCount: number;
+    coveragePercent: number;
+}
+
+interface StoryPointsCoverageOptions {
+    excludeIssueTypes?: string[];
+}
+
+export function hasStoryPointsCoverage(
+    issues: JiraIssue[],
+    options: StoryPointsCoverageOptions = {}
+): StoryPointsCoverage {
+    const excludedTypes = new Set(
+        (options.excludeIssueTypes || []).map((type) => type.trim().toLowerCase())
+    );
+
+    const coverageScope = issues.filter((issue) => {
+        if (excludedTypes.size === 0) return true;
+        return !excludedTypes.has((issue.issueType || '').toLowerCase());
+    });
+
+    const totalCount = coverageScope.length;
+    const coveredCount = coverageScope.filter((issue) => issue.storyPoints !== null && issue.storyPoints !== undefined).length;
+    const coveragePercent = totalCount > 0
+        ? Math.round((coveredCount / totalCount) * 100)
+        : 100;
+
+    return {
+        coveredCount,
+        totalCount,
+        coveragePercent,
+    };
+}
+
 export interface SprintOverviewMetrics {
     sprint: Sprint | null;
     committedTickets: number;

@@ -20,6 +20,7 @@ export type WorkflowStage =
 
 export type IssueType =
     | 'Bug' | 'Story' | 'Task' | 'Feature' | 'Epic' | 'Subtask'
+    | 'Sub-task' | 'Test Sub-task'
     | 'Technical Task' | 'Spike' | 'Developer Request' | 'Support' | 'Chore';
 
 export type Priority = 'Highest' | 'High' | 'Medium' | 'Low' | 'Lowest';
@@ -71,6 +72,7 @@ export interface JiraIssue {
     created: string;
     updated: string;
     resolved: string | null;
+    resolution?: string | null;
     dueDate: string | null;
     changelog: ChangelogEntry[];
     commentsCount: number;
@@ -170,7 +172,8 @@ export interface WorkflowFunnelStage {
 
 export type AIReportType =
     | 'sprint_summary' | 'stakeholder_update' | 'executive_summary'
-    | 'pm_weekly' | 'release_notes' | 'blockers_summary' | 'selected_tickets';
+    | 'pm_weekly' | 'release_notes' | 'blockers_summary' | 'selected_tickets'
+    | 'morning_briefing';
 
 export type AIReportTone =
     | 'executive' | 'pm_internal' | 'engineering' | 'slack' | 'polished';
