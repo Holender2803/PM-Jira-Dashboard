@@ -1,11 +1,17 @@
 'use client';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import { StatCard } from '@/components/ui/Badges';
 import IssueTable from '@/components/tables/IssueTable';
-import { calculateWorkflowMetrics } from '@/lib/analytics';
+import {
+    calculateWorkflowMetrics,
+    getCycleLeadTimeDistribution,
+    CycleLeadMetric,
+} from '@/lib/analytics';
 import { StatusChart, WorkflowFunnelChart } from '@/components/charts/DashboardCharts';
+import CycleTimeChart from '@/components/charts/CycleTimeChart';
+import { ChevronDown } from 'lucide-react';
 import {
     ResponsiveContainer,
     LineChart,
@@ -22,11 +28,31 @@ import {
 export default function WorkflowPage() {
     const filtered = useFilteredIssues();
     const metrics = useMemo(() => calculateWorkflowMetrics(filtered), [filtered]);
+    const [timeMode, setTimeMode] = useState<CycleLeadMetric>('cycle');
+    const [selectedIssueType, setSelectedIssueType] = useState<'all' | 'Story' | 'Bug' | 'Task' | 'Subtask'>('all');
+    const [showTimeDistribution, setShowTimeDistribution] = useState(true);
+
+    const cycleLeadDistribution = useMemo(
+        () =>
+            getCycleLeadTimeDistribution(filtered, {
+                metric: timeMode,
+                issueTypes: selectedIssueType === 'all' ? undefined : [selectedIssueType],
+            }),
+        [filtered, selectedIssueType, timeMode]
+    );
 
     const avgTimeData = Object.entries(metrics.avgTimeByStatus)
         .filter(([, avg]) => avg > 0)
         .map(([status, avgDays]) => ({ status, avgDays }))
         .sort((a, b) => b.avgDays - a.avgDays);
+
+    const issueTypeSegments: { label: string; value: 'all' | 'Story' | 'Bug' | 'Task' | 'Subtask' }[] = [
+        { label: 'All', value: 'all' },
+        { label: 'Story', value: 'Story' },
+        { label: 'Bug', value: 'Bug' },
+        { label: 'Task', value: 'Task' },
+        { label: 'Sub-task', value: 'Subtask' },
+    ];
 
     return (
         <div>
@@ -52,6 +78,111 @@ export default function WorkflowPage() {
                 <div className="dashboard-grid grid-2">
                     <StatusChart issues={filtered} />
                     <WorkflowFunnelChart issues={filtered} />
+                </div>
+
+                <div className="card">
+                    <button
+                        type="button"
+                        onClick={() => setShowTimeDistribution((current) => !current)}
+                        style={{
+                            width: '100%',
+                            background: 'transparent',
+                            border: 0,
+                            padding: 0,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                        }}
+                    >
+                        <div>
+                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                ⏱ Cycle/Lead Time Distribution
+                            </div>
+                            <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                Histogram with p50 / p75 / p95 percentiles based on resolved tickets
+                            </div>
+                        </div>
+                        <ChevronDown
+                            size={16}
+                            style={{
+                                color: 'var(--text-secondary)',
+                                transform: showTimeDistribution ? 'rotate(180deg)' : 'rotate(0deg)',
+                                transition: 'transform 0.15s ease',
+                            }}
+                        />
+                    </button>
+
+                    {showTimeDistribution && (
+                        <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            <div
+                                style={{
+                                    display: 'flex',
+                                    flexWrap: 'wrap',
+                                    gap: 10,
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                }}
+                            >
+                                <div className="tab-bar">
+                                    {[
+                                        { label: 'Cycle Time', value: 'cycle' as const },
+                                        { label: 'Lead Time', value: 'lead' as const },
+                                    ].map((option) => (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            className={`tab ${timeMode === option.value ? 'active' : ''}`}
+                                            onClick={() => setTimeMode(option.value)}
+                                        >
+                                            {option.label}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="tab-bar">
+                                    {issueTypeSegments.map((segment) => (
+                                        <button
+                                            key={segment.value}
+                                            type="button"
+                                            className={`tab ${selectedIssueType === segment.value ? 'active' : ''}`}
+                                            onClick={() => setSelectedIssueType(segment.value)}
+                                        >
+                                            {segment.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            <div
+                                style={{
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 10,
+                                    background: 'var(--bg-elevated)',
+                                    padding: '12px 14px',
+                                    display: 'grid',
+                                    gap: 8,
+                                }}
+                            >
+                                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                    How to read this chart
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                    <strong>Lead Time</strong> = Created to Resolved.{' '}
+                                    <strong>Cycle Time</strong> = first move to <em>In Progress</em> to Resolved.
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                    <strong>Histogram:</strong> X-axis shows day buckets (for example 0-4d, 5-9d); Y-axis shows how many tickets finished in each bucket.
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                                    <strong>Percentiles:</strong> P50 is the typical completion time, P75 is slower-tail behavior, and P95 highlights outliers/risk.
+                                    A widening gap between P50 and P95 usually means inconsistent flow or blocked/stuck work.
+                                </div>
+                            </div>
+
+                            <CycleTimeChart distribution={cycleLeadDistribution} mode={timeMode} />
+                        </div>
+                    )}
                 </div>
 
                 <div className="dashboard-grid grid-2">

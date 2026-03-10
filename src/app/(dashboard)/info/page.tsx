@@ -49,6 +49,8 @@ const PAGE_GUIDE = [
             'Use this when delivery feels slow and you need root-cause evidence.',
             'Check average time by status and blocked aging first.',
             'Use cumulative flow to explain where throughput is constrained.',
+            'Use Cycle vs Lead toggle: Lead = Created→Resolved, Cycle = first In Progress→Resolved.',
+            'Read histogram buckets as completion-time distribution and use P50/P75/P95 to explain typical flow vs outliers.',
         ],
     },
     {
