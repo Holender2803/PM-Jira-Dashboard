@@ -1,40 +1,89 @@
 'use client';
-import { useAppStore } from '@/store/app-store';
+import { useMemo, useState } from 'react';
+import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import { CLOSED_STATUSES } from '@/lib/workflow';
 import { StatCard, ProgressBar } from '@/components/ui/Badges';
 import FilterBar from '@/components/filters/FilterBar';
 import IssueTable from '@/components/tables/IssueTable';
 import { SprintProgressChart, AssigneeChart } from '@/components/charts/DashboardCharts';
+import VelocityChart from '@/components/charts/VelocityChart';
+import CapacityPlanner from '@/components/CapacityPlanner';
+import { getCapacityData, getVelocityTrend } from '@/lib/analytics';
+import { ChevronDown } from 'lucide-react';
 
 export default function SprintPage() {
-    const { issues, setFilters } = useAppStore();
+    const filteredIssues = useFilteredIssues();
+    const setFilters = useAppStore((state) => state.setFilters);
+    const selectedProject = useAppStore((state) => state.filters.project?.[0]);
+    const [showCapacityPlanner, setShowCapacityPlanner] = useState(true);
 
-    const activeSprint = issues.find(i => i.sprint?.state === 'active')?.sprint;
-    const prevSprint = issues.find(i => i.sprint?.state === 'closed')?.sprint;
+    const sprints = useMemo(
+        () =>
+            Array.from(
+                new Map(
+                    filteredIssues
+                        .filter((issue) => issue.sprint)
+                        .map((issue) => [issue.sprint!.id, issue.sprint!])
+                ).values()
+            ).sort((a, b) => (b.id || 0) - (a.id || 0)),
+        [filteredIssues]
+    );
 
-    const sprintIssues = issues.filter(i => i.sprint?.state === 'active');
-    const prevSprintIssues = issues.filter(i => i.sprint?.state === 'closed');
+    const activeSprint = sprints.find((sprint) => sprint.state === 'active') || null;
+    const prevSprint =
+        sprints.find(
+            (sprint) => sprint.state === 'closed' && sprint.id !== activeSprint?.id
+        ) || null;
 
-    const done = sprintIssues.filter(i => CLOSED_STATUSES.includes(i.status));
-    const notDone = sprintIssues.filter(i => !CLOSED_STATUSES.includes(i.status));
-    const blocked = sprintIssues.filter(i => i.status === 'Blocked');
-    const inProgress = sprintIssues.filter(i => i.status === 'In Progress');
-    const inReview = sprintIssues.filter(i => ['In Review', 'Reviewed'].includes(i.status));
-    const inQA = sprintIssues.filter(i => ['Ready for QA', 'In QA'].includes(i.status));
+    const sprintIssues = useMemo(
+        () =>
+            activeSprint
+                ? filteredIssues.filter((issue) => issue.sprint?.id === activeSprint.id)
+                : [],
+        [activeSprint, filteredIssues]
+    );
+    const prevSprintIssues = useMemo(
+        () =>
+            prevSprint
+                ? filteredIssues.filter((issue) => issue.sprint?.id === prevSprint.id)
+                : [],
+        [filteredIssues, prevSprint]
+    );
+
+    const done = sprintIssues.filter((issue) => CLOSED_STATUSES.includes(issue.status));
+    const notDone = sprintIssues.filter((issue) => !CLOSED_STATUSES.includes(issue.status));
+    const blocked = sprintIssues.filter((issue) => issue.status === 'Blocked');
+    const inProgress = sprintIssues.filter((issue) => issue.status === 'In Progress');
+    const inReview = sprintIssues.filter((issue) => ['In Review', 'Reviewed'].includes(issue.status));
+    const inQA = sprintIssues.filter((issue) => ['Ready for QA', 'In QA'].includes(issue.status));
 
     const committed = sprintIssues.length;
     const completed = done.length;
     const completionRate = committed > 0 ? Math.round((completed / committed) * 100) : 0;
 
-    const committedPts = sprintIssues.reduce((s, i) => s + (i.storyPoints || 0), 0);
-    const completedPts = done.reduce((s, i) => s + (i.storyPoints || 0), 0);
+    const committedPts = sprintIssues.reduce((sum, issue) => sum + (issue.storyPoints || 0), 0);
+    const completedPts = done.reduce((sum, issue) => sum + (issue.storyPoints || 0), 0);
 
-    const prevDone = prevSprintIssues.filter(i => CLOSED_STATUSES.includes(i.status));
+    const prevDone = prevSprintIssues.filter((issue) => CLOSED_STATUSES.includes(issue.status));
     const prevRate = prevSprintIssues.length > 0 ? Math.round((prevDone.length / prevSprintIssues.length) * 100) : 0;
+    const velocityTrend = useMemo(
+        () => getVelocityTrend(filteredIssues, selectedProject),
+        [filteredIssues, selectedProject]
+    );
+    const capacityData = useMemo(
+        () =>
+            getCapacityData({
+                issues: filteredIssues,
+                sprintId: activeSprint?.id,
+            }),
+        [filteredIssues, activeSprint?.id]
+    );
 
     // Status breakdown
     const byStatus: Record<string, number> = {};
-    sprintIssues.forEach(i => { byStatus[i.status] = (byStatus[i.status] || 0) + 1; });
+    sprintIssues.forEach((issue) => {
+        byStatus[issue.status] = (byStatus[issue.status] || 0) + 1;
+    });
 
     return (
         <div>
@@ -96,6 +145,48 @@ export default function SprintPage() {
                         color="#8b5cf6"
                     />
                     <StatCard label="Carry-over Risk" value={notDone.length - inProgress.length - inReview.length - inQA.length} color={blocked.length > 0 ? '#ef4444' : '#64748b'} />
+                </div>
+
+                <VelocityChart data={velocityTrend} />
+
+                <div className="card">
+                    <button
+                        type="button"
+                        onClick={() => setShowCapacityPlanner((current) => !current)}
+                        style={{
+                            width: '100%',
+                            background: 'transparent',
+                            border: 0,
+                            padding: 0,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            cursor: 'pointer',
+                        }}
+                    >
+                        <div>
+                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                📈 Capacity Planning
+                            </div>
+                            <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary)' }}>
+                                Rolling forecast, sprint capacity delta, and what-if planning
+                            </div>
+                        </div>
+                        <ChevronDown
+                            size={16}
+                            style={{
+                                color: 'var(--text-secondary)',
+                                transform: showCapacityPlanner ? 'rotate(180deg)' : 'rotate(0deg)',
+                                transition: 'transform 0.15s ease',
+                            }}
+                        />
+                    </button>
+
+                    {showCapacityPlanner && (
+                        <div style={{ marginTop: 16 }}>
+                            <CapacityPlanner data={capacityData} />
+                        </div>
+                    )}
                 </div>
 
                 {/* Stage breakdown cards */}

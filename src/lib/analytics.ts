@@ -122,6 +122,153 @@ export interface SprintOverviewMetrics {
     byDay: { date: string; completed: number; remaining: number }[];
 }
 
+export interface VelocityTrendPoint {
+    sprintName: string;
+    sprintEndDate: string;
+    completedPoints: number;
+    completedTickets: number;
+    rollingAvg3Sprint: number;
+}
+
+export interface CapacitySprintPoint {
+    sprintId: number;
+    sprintName: string;
+    sprintState: Sprint['state'] | 'unknown';
+    sprintEndDate: string;
+    committed: number;
+    completed: number;
+    completionRate: number;
+}
+
+export interface CapacityData {
+    committed: number;
+    completed: number;
+    completionRate: number;
+    forecast3Sprint: number;
+    teamCapacityDelta: number;
+    rollingAvgCompletionRate: number;
+    bySprint: CapacitySprintPoint[];
+    historical3Sprint: CapacitySprintPoint[];
+    targetSprintId: number | null;
+    targetSprintName: string;
+    forecastConfidenceLow: number;
+    forecastConfidenceHigh: number;
+}
+
+export type CycleLeadMetric = 'cycle' | 'lead';
+
+export interface CycleLeadTimeDistributionFilters {
+    metric?: CycleLeadMetric;
+    issueTypes?: string[];
+    bucketSizeDays?: number;
+}
+
+export interface DistributionPercentiles {
+    p50: number;
+    p75: number;
+    p95: number;
+}
+
+export interface DistributionDataPoint {
+    key: string;
+    issueType: string;
+    days: number;
+}
+
+export interface DistributionIssueTypeGroup {
+    issueType: string;
+    percentiles: DistributionPercentiles;
+    rawData: DistributionDataPoint[];
+}
+
+export interface DistributionHistogramBin {
+    bucket: string;
+    minDays: number;
+    maxDays: number;
+    count: number;
+}
+
+export interface CycleLeadTimeDistribution {
+    metric: CycleLeadMetric;
+    totalPoints: number;
+    percentiles: DistributionPercentiles;
+    histogram: DistributionHistogramBin[];
+    byIssueType: DistributionIssueTypeGroup[];
+}
+
+function percentileFromSorted(sortedValues: number[], percentile: number): number {
+    if (sortedValues.length === 0) return 0;
+    const rank = Math.ceil(percentile * sortedValues.length);
+    const index = Math.min(sortedValues.length - 1, Math.max(0, rank - 1));
+    return sortedValues[index];
+}
+
+function calculateDistributionPercentiles(values: number[]): DistributionPercentiles {
+    if (values.length === 0) {
+        return { p50: 0, p75: 0, p95: 0 };
+    }
+
+    const sorted = [...values].sort((a, b) => a - b);
+    return {
+        p50: Number(percentileFromSorted(sorted, 0.5).toFixed(1)),
+        p75: Number(percentileFromSorted(sorted, 0.75).toFixed(1)),
+        p95: Number(percentileFromSorted(sorted, 0.95).toFixed(1)),
+    };
+}
+
+function chooseDistributionBucketSize(maxDays: number): number {
+    if (maxDays <= 14) return 2;
+    if (maxDays <= 35) return 5;
+    if (maxDays <= 70) return 7;
+    return 14;
+}
+
+function buildDistributionHistogram(
+    values: number[],
+    bucketSizeDays: number
+): DistributionHistogramBin[] {
+    if (values.length === 0) return [];
+
+    const safeBucketSize = Math.max(1, bucketSizeDays);
+    const sorted = [...values].sort((a, b) => a - b);
+    const maxValue = sorted[sorted.length - 1];
+    const bins: DistributionHistogramBin[] = [];
+
+    for (let start = 0; start <= maxValue; start += safeBucketSize) {
+        const end = start + safeBucketSize - 1;
+        const count = sorted.filter((value) => value >= start && value <= end).length;
+        bins.push({
+            bucket: `${start}-${end}d`,
+            minDays: start,
+            maxDays: end,
+            count,
+        });
+    }
+
+    return bins;
+}
+
+function getLeadTimeDays(issue: JiraIssue): number | null {
+    const created = safeParseDate(issue.created);
+    const resolved = safeParseDate(issue.resolved);
+    if (!created || !resolved) return null;
+    return Math.max(0, differenceInCalendarDays(resolved, created));
+}
+
+function getCycleTimeDays(issue: JiraIssue): number | null {
+    const resolved = safeParseDate(issue.resolved);
+    if (!resolved) return null;
+
+    const inProgressTransition = issue.changelog
+        .filter((entry) => includesText(entry.field, 'status') && entry.toString === 'In Progress')
+        .sort((a, b) => a.created.localeCompare(b.created))[0];
+
+    const inProgressDate = safeParseDate(inProgressTransition?.created || null);
+    if (!inProgressDate) return null;
+
+    return Math.max(0, differenceInCalendarDays(resolved, inProgressDate));
+}
+
 function issueTouchedSprint(issue: JiraIssue, sprintName: string): boolean {
     return issue.changelog.some((entry) => {
         if (!includesText(entry.field, 'sprint')) return false;
@@ -227,6 +374,265 @@ export function calculateSprintOverview(
         byStatus: statusCounts,
         storyPointsByStatus: statusPoints,
         byDay,
+    };
+}
+
+export function getVelocityTrend(
+    issues: JiraIssue[],
+    projectKey?: string
+): VelocityTrendPoint[] {
+    type Aggregate = {
+        sprintName: string;
+        sprintEndDate: string;
+        completedPoints: number;
+        completedTickets: number;
+        sortTime: number;
+    };
+
+    const bySprint = new Map<number, Aggregate>();
+
+    for (const issue of issues) {
+        if (!issue.sprint) continue;
+        if (!isClosed(issue.status)) continue;
+        if (projectKey && issue.project !== projectKey) continue;
+
+        const sprintDate =
+            safeParseDate(issue.sprint.completeDate) ||
+            safeParseDate(issue.sprint.endDate) ||
+            safeParseDate(issue.resolved) ||
+            safeParseDate(issue.updated) ||
+            safeParseDate(issue.created) ||
+            new Date(0);
+
+        const key = issue.sprint.id;
+        const existing = bySprint.get(key);
+        if (!existing) {
+            bySprint.set(key, {
+                sprintName: issue.sprint.name || `Sprint ${issue.sprint.id}`,
+                sprintEndDate: format(sprintDate, 'yyyy-MM-dd'),
+                completedPoints: issue.storyPoints || 0,
+                completedTickets: 1,
+                sortTime: sprintDate.getTime(),
+            });
+            continue;
+        }
+
+        existing.completedPoints += issue.storyPoints || 0;
+        existing.completedTickets += 1;
+
+        const sprintTime = sprintDate.getTime();
+        if (sprintTime > existing.sortTime) {
+            existing.sortTime = sprintTime;
+            existing.sprintEndDate = format(sprintDate, 'yyyy-MM-dd');
+        }
+    }
+
+    const ordered = [...bySprint.values()].sort((a, b) => a.sortTime - b.sortTime);
+
+    return ordered.map((row, index) => {
+        const windowStart = Math.max(0, index - 2);
+        const window = ordered.slice(windowStart, index + 1);
+        const rollingAvg3Sprint =
+            window.reduce((sum, item) => sum + item.completedPoints, 0) / window.length;
+
+        return {
+            sprintName: row.sprintName,
+            sprintEndDate: row.sprintEndDate,
+            completedPoints: row.completedPoints,
+            completedTickets: row.completedTickets,
+            rollingAvg3Sprint: Number(rollingAvg3Sprint.toFixed(1)),
+        };
+    });
+}
+
+function average(values: number[]): number {
+    if (values.length === 0) return 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]): number {
+    if (values.length < 2) return 0;
+    const mean = average(values);
+    const variance =
+        values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+    return Math.sqrt(variance);
+}
+
+function safeRound(value: number, decimals = 1): number {
+    return Number(value.toFixed(decimals));
+}
+
+export function getCapacityData(
+    input: JiraIssue[] | { issues: JiraIssue[]; sprintId?: number },
+    sprintId?: number
+): CapacityData {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const targetSprintId = Array.isArray(input) ? sprintId : input.sprintId;
+
+    type Aggregate = {
+        sprintId: number;
+        sprintName: string;
+        sprintState: Sprint['state'] | 'unknown';
+        sprintEndDate: string;
+        sortTime: number;
+        committed: number;
+        completed: number;
+    };
+
+    const bySprint = new Map<number, Aggregate>();
+    for (const issue of issues) {
+        if (!issue.sprint) continue;
+        const id = issue.sprint.id;
+        const sprintDate =
+            safeParseDate(issue.sprint.completeDate) ||
+            safeParseDate(issue.sprint.endDate) ||
+            safeParseDate(issue.sprint.startDate) ||
+            safeParseDate(issue.updated) ||
+            safeParseDate(issue.created) ||
+            new Date(0);
+
+        const existing = bySprint.get(id) || {
+            sprintId: id,
+            sprintName: issue.sprint.name || `Sprint ${id}`,
+            sprintState: issue.sprint.state || 'unknown',
+            sprintEndDate: format(sprintDate, 'yyyy-MM-dd'),
+            sortTime: sprintDate.getTime(),
+            committed: 0,
+            completed: 0,
+        };
+
+        existing.committed += issue.storyPoints || 0;
+        if (isClosed(issue.status)) {
+            existing.completed += issue.storyPoints || 0;
+        }
+
+        const sprintTime = sprintDate.getTime();
+        if (sprintTime > existing.sortTime) {
+            existing.sortTime = sprintTime;
+            existing.sprintEndDate = format(sprintDate, 'yyyy-MM-dd');
+        }
+        existing.sprintState = issue.sprint.state || existing.sprintState;
+        bySprint.set(id, existing);
+    }
+
+    const ordered = [...bySprint.values()]
+        .sort((a, b) => a.sortTime - b.sortTime)
+        .map<CapacitySprintPoint>((row) => ({
+            sprintId: row.sprintId,
+            sprintName: row.sprintName,
+            sprintState: row.sprintState,
+            sprintEndDate: row.sprintEndDate,
+            committed: safeRound(row.committed),
+            completed: safeRound(row.completed),
+            completionRate:
+                row.committed > 0
+                    ? safeRound((row.completed / row.committed) * 100)
+                    : 0,
+        }));
+
+    const target =
+        (targetSprintId !== undefined
+            ? ordered.find((row) => row.sprintId === targetSprintId)
+            : undefined) ||
+        ordered.find((row) => row.sprintState === 'active') ||
+        ordered[ordered.length - 1] ||
+        null;
+
+    const priorClosed = target
+        ? ordered.filter(
+            (row) => row.sprintState === 'closed' && row.sprintId !== target.sprintId
+        )
+        : ordered.filter((row) => row.sprintState === 'closed');
+
+    const historical3Sprint = priorClosed.slice(-3);
+    const historicalRates = historical3Sprint
+        .filter((row) => row.committed > 0)
+        .map((row) => row.completed / row.committed);
+    const rollingRate = average(historicalRates);
+    const rollingAvgCompletionRate = safeRound(rollingRate * 100, 1);
+
+    const committed = target?.committed || 0;
+    const completed = target?.completed || 0;
+    const completionRate = target?.completionRate || 0;
+
+    // Forecast uses rolling 3-sprint completion rate × committed points.
+    const forecast3Sprint = safeRound(committed * rollingRate, 1);
+    const teamCapacityDelta = safeRound(forecast3Sprint - committed, 1);
+
+    const rateStdDev = standardDeviation(historicalRates);
+    const lowRate = Math.max(0, rollingRate - rateStdDev);
+    const highRate = Math.min(1, rollingRate + rateStdDev);
+    const forecastConfidenceLow = safeRound(committed * lowRate, 1);
+    const forecastConfidenceHigh = safeRound(committed * highRate, 1);
+
+    return {
+        committed,
+        completed,
+        completionRate,
+        forecast3Sprint,
+        teamCapacityDelta,
+        rollingAvgCompletionRate,
+        bySprint: ordered.slice(-6),
+        historical3Sprint,
+        targetSprintId: target?.sprintId || null,
+        targetSprintName: target?.sprintName || 'Current / Next Sprint',
+        forecastConfidenceLow,
+        forecastConfidenceHigh,
+    };
+}
+
+export function getCycleLeadTimeDistribution(
+    input: JiraIssue[] | (CycleLeadTimeDistributionFilters & { issues: JiraIssue[] }),
+    filters: CycleLeadTimeDistributionFilters = {}
+): CycleLeadTimeDistribution {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const distributionFilters = Array.isArray(input) ? filters : input;
+    const metric: CycleLeadMetric = distributionFilters.metric || 'cycle';
+    const selectedTypes = new Set((distributionFilters.issueTypes || []).map((type) => type.toLowerCase()));
+    const grouped = new Map<string, DistributionDataPoint[]>();
+
+    for (const issue of issues) {
+        if (selectedTypes.size > 0 && !selectedTypes.has(issue.issueType.toLowerCase())) {
+            continue;
+        }
+
+        const days =
+            metric === 'lead'
+                ? getLeadTimeDays(issue)
+                : getCycleTimeDays(issue);
+
+        if (days === null) continue;
+
+        const points = grouped.get(issue.issueType) || [];
+        points.push({
+            key: issue.key,
+            issueType: issue.issueType,
+            days,
+        });
+        grouped.set(issue.issueType, points);
+    }
+
+    const byIssueType: DistributionIssueTypeGroup[] = [...grouped.entries()]
+        .map(([issueType, rawData]) => {
+            const values = rawData.map((point) => point.days);
+            return {
+                issueType,
+                percentiles: calculateDistributionPercentiles(values),
+                rawData: [...rawData].sort((a, b) => a.days - b.days),
+            };
+        })
+        .sort((a, b) => b.rawData.length - a.rawData.length);
+
+    const allValues = byIssueType.flatMap((group) => group.rawData.map((point) => point.days));
+    const maxDays = allValues.length > 0 ? Math.max(...allValues) : 0;
+    const bucketSizeDays = distributionFilters.bucketSizeDays || chooseDistributionBucketSize(maxDays);
+
+    return {
+        metric,
+        totalPoints: allValues.length,
+        percentiles: calculateDistributionPercentiles(allValues),
+        histogram: buildDistributionHistogram(allValues, bucketSizeDays),
+        byIssueType,
     };
 }
 
@@ -662,6 +1068,130 @@ export interface BugsMetrics {
     avgResolutionDays: number;
     oldestUnresolved: JiraIssue[];
     arrivalVsClosureTrend: { week: string; opened: number; closed: number }[];
+}
+
+export interface ReopenRateFilters {
+    windowDays?: number;
+    now?: Date;
+}
+
+export interface ReopenRateTicket {
+    key: string;
+    summary: string;
+    reopenCount: number;
+    url: string;
+    status: IssueStatus;
+    assignee: string | null;
+}
+
+export interface ReopenRateMetrics {
+    totalBugs: number;
+    reopenedCount: number;
+    reopenRate: number;
+    topReopenedTickets: ReopenRateTicket[];
+    currentWindowRate: number;
+    priorWindowRate: number;
+    trendVsPrior30Day: number | null;
+    windowDays: number;
+    methodology: string;
+}
+
+function isClosedStatusLabel(value: string | null | undefined): boolean {
+    if (!value) return false;
+    const normalized = normalize(value);
+    return CLOSED_STATUSES.some((status) => normalize(status) === normalized);
+}
+
+function countReopenTransitions(issue: JiraIssue): number {
+    const statusChanges = issue.changelog
+        .filter((entry) => includesText(entry.field, 'status'))
+        .sort((a, b) => a.created.localeCompare(b.created));
+
+    let reopenTransitions = 0;
+    for (const change of statusChanges) {
+        const fromClosed = isClosedStatusLabel(change.fromString);
+        const toOpenOrActive = !!change.toString && !isClosedStatusLabel(change.toString);
+        if (fromClosed && toOpenOrActive) reopenTransitions += 1;
+    }
+
+    return reopenTransitions;
+}
+
+function safePercent(numerator: number, denominator: number): number {
+    if (denominator <= 0) return 0;
+    return Number(((numerator / denominator) * 100).toFixed(1));
+}
+
+export function getReopenRates(
+    input: JiraIssue[] | ({ issues: JiraIssue[] } & ReopenRateFilters),
+    filters: ReopenRateFilters = {}
+): ReopenRateMetrics {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const resolvedFilters = Array.isArray(input) ? filters : input;
+    const windowDays = resolvedFilters.windowDays || 30;
+    const now = resolvedFilters.now || new Date();
+    const currentStart = subDays(now, windowDays);
+    const previousStart = subDays(currentStart, windowDays);
+
+    const bugReopenRows = issues
+        .filter((issue) => issue.issueType === 'Bug')
+        .map((issue) => ({
+            issue,
+            reopenCount: countReopenTransitions(issue),
+            updatedAt: safeParseDate(issue.updated) || safeParseDate(issue.created) || new Date(0),
+        }));
+
+    const totalBugs = bugReopenRows.length;
+    const reopened = bugReopenRows.filter((row) => row.reopenCount > 0);
+    const reopenedCount = reopened.length;
+    const reopenRate = safePercent(reopenedCount, totalBugs);
+
+    const topReopenedTickets = [...reopened]
+        .sort((a, b) => {
+            if (b.reopenCount !== a.reopenCount) return b.reopenCount - a.reopenCount;
+            return b.updatedAt.getTime() - a.updatedAt.getTime();
+        })
+        .slice(0, 5)
+        .map(({ issue, reopenCount }) => ({
+            key: issue.key,
+            summary: issue.summary,
+            reopenCount,
+            url: issue.url,
+            status: issue.status,
+            assignee: issue.assignee?.displayName || null,
+        }));
+
+    const currentWindow = bugReopenRows.filter(
+        (row) => row.updatedAt >= currentStart && row.updatedAt <= now
+    );
+    const priorWindow = bugReopenRows.filter(
+        (row) => row.updatedAt >= previousStart && row.updatedAt < currentStart
+    );
+
+    const currentWindowRate = safePercent(
+        currentWindow.filter((row) => row.reopenCount > 0).length,
+        currentWindow.length
+    );
+    const priorWindowRate = safePercent(
+        priorWindow.filter((row) => row.reopenCount > 0).length,
+        priorWindow.length
+    );
+
+    return {
+        totalBugs,
+        reopenedCount,
+        reopenRate,
+        topReopenedTickets,
+        currentWindowRate,
+        priorWindowRate,
+        trendVsPrior30Day:
+            priorWindow.length > 0
+                ? Number((currentWindowRate - priorWindowRate).toFixed(1))
+                : null,
+        windowDays,
+        methodology:
+            'A bug is counted as reopened when status history transitions from closed (Done/Archived/Rejected) back to a non-closed status. Reopen rate = reopened bugs / total bugs in current filter scope.',
+    };
 }
 
 export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {

@@ -4,8 +4,9 @@ import { useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import { StatCard } from '@/components/ui/Badges';
 import IssueTable from '@/components/tables/IssueTable';
-import { calculateBugMetrics } from '@/lib/analytics';
+import { calculateBugMetrics, getReopenRates } from '@/lib/analytics';
 import { BugPriorityChart } from '@/components/charts/DashboardCharts';
+import ReopenRateCard from '@/components/ReopenRateCard';
 import {
     ResponsiveContainer,
     LineChart,
@@ -22,6 +23,7 @@ import {
 export default function BugsPage() {
     const filtered = useFilteredIssues();
     const metrics = useMemo(() => calculateBugMetrics(filtered), [filtered]);
+    const reopenRates = useMemo(() => getReopenRates(filtered), [filtered]);
 
     return (
         <div>
@@ -37,11 +39,15 @@ export default function BugsPage() {
             <FilterBar />
 
             <div style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
-                <div className="dashboard-grid grid-4">
+                <div
+                    className="dashboard-grid"
+                    style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))' }}
+                >
                     <StatCard label="Total Bugs" value={metrics.total} color="#ef4444" />
                     <StatCard label="Open Bugs" value={metrics.open} color="#f97316" />
                     <StatCard label="In Progress Bugs" value={metrics.inProgress} color="#3b82f6" />
                     <StatCard label="Closed Bugs" value={metrics.closed} color="#10b981" />
+                    <ReopenRateCard data={reopenRates} />
                 </div>
 
                 <div className="dashboard-grid grid-2">
