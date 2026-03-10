@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/app-store';
 import { DEFAULT_BUG_TRACKING_CONFIG } from '@/lib/bug-tracking';
+import { DEFAULT_TEAM_CONFIG, type TeamConfig } from '@/lib/team-config';
 
 const DEFAULT_JQL = `(project = Engineering AND "Team/Squad[Select List (cascading)]" IN ("MDFM", "Legacy MDFM") and "Team/Squad[Select List (cascading)]" not IN ("Backoffice/OBT") AND worktype != Initiative and "Team[Team]" in (5d9f2497-c05d-466c-aac5-e05183bb3c2c-cfc65711, f5437b0c-2973-42f7-896c-2e34bcc829df)) or (project != Engineering and "Team[Team]" in (5d9f2497-c05d-466c-aac5-e05183bb3c2c-cfc65711, f5437b0c-2973-42f7-896c-2e34bcc829df)) ORDER BY status DESC, Rank ASC`;
 
@@ -13,6 +14,21 @@ type ConnectionState = {
 };
 
 const LOCAL_STORAGE_KEY = 'jira_dashboard_manual_credentials';
+const USD_FORMATTER = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+});
+
+function toPositiveInteger(value: number, fallback: number): number {
+    if (!Number.isFinite(value)) return fallback;
+    const rounded = Math.round(value);
+    return rounded > 0 ? rounded : fallback;
+}
+
+function formatUsd(value: number): string {
+    return USD_FORMATTER.format(value);
+}
 
 export default function SettingsPage() {
     const { demoMode } = useAppStore();
@@ -35,9 +51,30 @@ export default function SettingsPage() {
     const [bugTrackingBusy, setBugTrackingBusy] = useState(false);
     const [bugTrackingResult, setBugTrackingResult] = useState<string | null>(null);
 
+    const [teamName, setTeamName] = useState(DEFAULT_TEAM_CONFIG.teamName);
+    const [activeEngineers, setActiveEngineers] = useState(DEFAULT_TEAM_CONFIG.activeEngineers);
+    const [hourlyRate, setHourlyRate] = useState(DEFAULT_TEAM_CONFIG.hourlyRate);
+    const [productiveHoursPerSprint, setProductiveHoursPerSprint] = useState(DEFAULT_TEAM_CONFIG.productiveHoursPerSprint);
+    const [sprintLengthWeeks, setSprintLengthWeeks] = useState(DEFAULT_TEAM_CONFIG.sprintLengthWeeks);
+    const [teamConfigBusy, setTeamConfigBusy] = useState(false);
+    const [teamConfigResult, setTeamConfigResult] = useState<string | null>(null);
+    const [teamConfigToast, setTeamConfigToast] = useState<string | null>(null);
+
     useEffect(() => {
         setHydrated(true);
     }, []);
+
+    useEffect(() => {
+        if (!teamConfigToast) return;
+
+        const timeoutId = window.setTimeout(() => {
+            setTeamConfigToast(null);
+        }, 2400);
+
+        return () => {
+            window.clearTimeout(timeoutId);
+        };
+    }, [teamConfigToast]);
 
     useEffect(() => {
         const load = async () => {
@@ -67,8 +104,30 @@ export default function SettingsPage() {
             }
         };
 
+        const loadTeamConfig = async () => {
+            try {
+                const res = await fetch('/api/team-config', { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json() as TeamConfig;
+
+                setTeamName((data.teamName || '').trim() || DEFAULT_TEAM_CONFIG.teamName);
+                setActiveEngineers(toPositiveInteger(data.activeEngineers, DEFAULT_TEAM_CONFIG.activeEngineers));
+                setHourlyRate(toPositiveInteger(data.hourlyRate, DEFAULT_TEAM_CONFIG.hourlyRate));
+                setProductiveHoursPerSprint(
+                    toPositiveInteger(
+                        data.productiveHoursPerSprint,
+                        DEFAULT_TEAM_CONFIG.productiveHoursPerSprint
+                    )
+                );
+                setSprintLengthWeeks(toPositiveInteger(data.sprintLengthWeeks, DEFAULT_TEAM_CONFIG.sprintLengthWeeks));
+            } catch {
+                // Keep defaults when config is unavailable.
+            }
+        };
+
         load();
         loadBugTrackingConfig();
+        loadTeamConfig();
 
         const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (stored) {
@@ -214,6 +273,70 @@ export default function SettingsPage() {
         }
     };
 
+    const safeActiveEngineers = toPositiveInteger(activeEngineers, DEFAULT_TEAM_CONFIG.activeEngineers);
+    const safeHourlyRate = toPositiveInteger(hourlyRate, DEFAULT_TEAM_CONFIG.hourlyRate);
+    const safeProductiveHoursPerSprint = toPositiveInteger(
+        productiveHoursPerSprint,
+        DEFAULT_TEAM_CONFIG.productiveHoursPerSprint
+    );
+    const safeSprintLengthWeeks = toPositiveInteger(sprintLengthWeeks, DEFAULT_TEAM_CONFIG.sprintLengthWeeks);
+
+    const oneDeveloperSprintCost = safeProductiveHoursPerSprint * safeHourlyRate;
+    const fullTeamSprintCost = oneDeveloperSprintCost * safeActiveEngineers;
+    const annualSprints = 46 / safeSprintLengthWeeks;
+    const annualTeamCost = fullTeamSprintCost * annualSprints;
+    const annualSprintsLabel = Number.isInteger(annualSprints)
+        ? String(annualSprints)
+        : annualSprints.toFixed(1);
+
+    const saveTeamConfig = async () => {
+        setTeamConfigBusy(true);
+        setTeamConfigResult(null);
+
+        try {
+            const response = await fetch('/api/team-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    teamName: (teamName || '').trim() || DEFAULT_TEAM_CONFIG.teamName,
+                    activeEngineers: safeActiveEngineers,
+                    hourlyRate: safeHourlyRate,
+                    productiveHoursPerSprint: safeProductiveHoursPerSprint,
+                    sprintLengthWeeks: safeSprintLengthWeeks,
+                }),
+            });
+            const data = await response.json() as {
+                error?: string;
+                config?: TeamConfig;
+            };
+
+            if (!response.ok) {
+                setTeamConfigResult(`Save failed: ${data.error || 'Unknown error'}`);
+                return;
+            }
+
+            const config = data.config;
+            if (config) {
+                setTeamName((config.teamName || '').trim() || DEFAULT_TEAM_CONFIG.teamName);
+                setActiveEngineers(toPositiveInteger(config.activeEngineers, DEFAULT_TEAM_CONFIG.activeEngineers));
+                setHourlyRate(toPositiveInteger(config.hourlyRate, DEFAULT_TEAM_CONFIG.hourlyRate));
+                setProductiveHoursPerSprint(
+                    toPositiveInteger(
+                        config.productiveHoursPerSprint,
+                        DEFAULT_TEAM_CONFIG.productiveHoursPerSprint
+                    )
+                );
+                setSprintLengthWeeks(toPositiveInteger(config.sprintLengthWeeks, DEFAULT_TEAM_CONFIG.sprintLengthWeeks));
+            }
+
+            setTeamConfigToast('Team configuration saved ✓');
+        } catch (error) {
+            setTeamConfigResult(`Save failed: ${String(error)}`);
+        } finally {
+            setTeamConfigBusy(false);
+        }
+    };
+
     return (
         <div>
             <div className="page-header" style={{ paddingBottom: 20 }}>
@@ -300,6 +423,110 @@ export default function SettingsPage() {
                     </div>
                 </div>
 
+                <div id="team-configuration" className="card" style={{ scrollMarginTop: 90 }}>
+                    <div className="chart-title" style={{ marginBottom: 10 }}>💰 Team Configuration</div>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                        Baseline capacity and cost assumptions used across dashboard calculations.
+                    </p>
+
+                    <div className="dashboard-grid grid-2">
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Team name
+                            </label>
+                            <input
+                                className="input"
+                                value={teamName}
+                                onChange={(event) => setTeamName(event.target.value)}
+                                placeholder="Engineering Team"
+                            />
+                        </div>
+
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Number of active engineers
+                            </label>
+                            <input
+                                className="input"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={activeEngineers}
+                                onChange={(event) => setActiveEngineers(toPositiveInteger(Number(event.target.value), activeEngineers))}
+                            />
+                        </div>
+
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Assumed hourly rate in USD
+                            </label>
+                            <input
+                                className="input"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={hourlyRate}
+                                onChange={(event) => setHourlyRate(toPositiveInteger(Number(event.target.value), hourlyRate))}
+                            />
+                        </div>
+
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Productive hours per sprint per developer
+                            </label>
+                            <input
+                                className="input"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={productiveHoursPerSprint}
+                                onChange={(event) => setProductiveHoursPerSprint(toPositiveInteger(Number(event.target.value), productiveHoursPerSprint))}
+                            />
+                            <p style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                                Typical range: 40-60 hours after meetings and code reviews
+                            </p>
+                        </div>
+
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Sprint length in weeks
+                            </label>
+                            <input
+                                className="input"
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={sprintLengthWeeks}
+                                onChange={(event) => setSprintLengthWeeks(toPositiveInteger(Number(event.target.value), sprintLengthWeeks))}
+                            />
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: 14, border: '1px solid var(--border)', borderRadius: 10, background: 'var(--bg-elevated)', padding: 12 }}>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                            Based on your config:
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                            <div>• 1 developer sprint ≈ {formatUsd(oneDeveloperSprintCost)}</div>
+                            <div>• Full team sprint ≈ {formatUsd(fullTeamSprintCost)}</div>
+                            <div>• Annual capacity: ~{annualSprintsLabel} sprints per year</div>
+                            <div>• Annual team cost: ~{formatUsd(annualTeamCost)}</div>
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <button className="btn btn-primary btn-sm" onClick={saveTeamConfig} disabled={teamConfigBusy}>
+                            {teamConfigBusy ? 'Saving...' : 'Save Team Configuration'}
+                        </button>
+                    </div>
+
+                    {teamConfigResult && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: teamConfigResult.startsWith('Save failed') ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                            {teamConfigResult}
+                        </div>
+                    )}
+                </div>
+
                 <div id="bug-tracking" className="card" style={{ scrollMarginTop: 90 }}>
                     <div className="chart-title" style={{ marginBottom: 10 }}>Bug Tracking</div>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
@@ -318,7 +545,7 @@ export default function SettingsPage() {
                                 placeholder="source"
                             />
                             <p style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
-                                The Jira label used to tag where bugs were found. Example: add label 'source:production' or 'source:qa' to bugs in Jira.
+                                The Jira label used to tag where bugs were found. Example: add label &apos;source:production&apos; or &apos;source:qa&apos; to bugs in Jira.
                             </p>
                         </div>
 
@@ -378,6 +605,28 @@ export default function SettingsPage() {
                     Security note: Jira secrets are used server-side for API calls and are never exposed in dashboard responses. Manual credentials entered here are stored only in your browser local storage and posted to `/api/sync` when you trigger actions.
                 </div>
             </div>
+
+            {teamConfigToast && (
+                <div
+                    role="status"
+                    aria-live="polite"
+                    style={{
+                        position: 'fixed',
+                        right: 24,
+                        bottom: 24,
+                        background: 'rgba(16,185,129,0.14)',
+                        border: '1px solid rgba(16,185,129,0.35)',
+                        color: '#6ee7b7',
+                        borderRadius: 10,
+                        padding: '10px 14px',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        zIndex: 50,
+                    }}
+                >
+                    {teamConfigToast}
+                </div>
+            )}
         </div>
     );
 }
