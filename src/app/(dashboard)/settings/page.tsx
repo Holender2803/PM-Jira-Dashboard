@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAppStore } from '@/store/app-store';
+import { DEFAULT_BUG_TRACKING_CONFIG } from '@/lib/bug-tracking';
 
 const DEFAULT_JQL = `(project = Engineering AND "Team/Squad[Select List (cascading)]" IN ("MDFM", "Legacy MDFM") and "Team/Squad[Select List (cascading)]" not IN ("Backoffice/OBT") AND worktype != Initiative and "Team[Team]" in (5d9f2497-c05d-466c-aac5-e05183bb3c2c-cfc65711, f5437b0c-2973-42f7-896c-2e34bcc829df)) or (project != Engineering and "Team[Team]" in (5d9f2497-c05d-466c-aac5-e05183bb3c2c-cfc65711, f5437b0c-2973-42f7-896c-2e34bcc829df)) ORDER BY status DESC, Rank ASC`;
 
@@ -27,6 +28,13 @@ export default function SettingsPage() {
     const [busy, setBusy] = useState(false);
     const [syncResult, setSyncResult] = useState<string | null>(null);
 
+    const [bugSourceLabel, setBugSourceLabel] = useState(DEFAULT_BUG_TRACKING_CONFIG.bugSourceLabel);
+    const [productionSourceKeywords, setProductionSourceKeywords] = useState(DEFAULT_BUG_TRACKING_CONFIG.productionKeywords);
+    const [qaSourceKeywords, setQaSourceKeywords] = useState(DEFAULT_BUG_TRACKING_CONFIG.qaKeywords);
+    const [bugTrackingConfigured, setBugTrackingConfigured] = useState(false);
+    const [bugTrackingBusy, setBugTrackingBusy] = useState(false);
+    const [bugTrackingResult, setBugTrackingResult] = useState<string | null>(null);
+
     useEffect(() => {
         setHydrated(true);
     }, []);
@@ -39,7 +47,28 @@ export default function SettingsPage() {
             setConnection(data);
         };
 
+        const loadBugTrackingConfig = async () => {
+            try {
+                const res = await fetch('/api/bug-tracking-config', { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json() as {
+                    bugSourceLabel: string;
+                    productionKeywords: string;
+                    qaKeywords: string;
+                    configured: boolean;
+                };
+
+                setBugSourceLabel(data.bugSourceLabel || DEFAULT_BUG_TRACKING_CONFIG.bugSourceLabel);
+                setProductionSourceKeywords(data.productionKeywords || DEFAULT_BUG_TRACKING_CONFIG.productionKeywords);
+                setQaSourceKeywords(data.qaKeywords || DEFAULT_BUG_TRACKING_CONFIG.qaKeywords);
+                setBugTrackingConfigured(Boolean(data.configured));
+            } catch {
+                // Keep defaults when config is unavailable.
+            }
+        };
+
         load();
+        loadBugTrackingConfig();
 
         const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (stored) {
@@ -157,6 +186,34 @@ export default function SettingsPage() {
         }
     };
 
+    const saveBugTrackingConfig = async () => {
+        setBugTrackingBusy(true);
+        setBugTrackingResult(null);
+
+        try {
+            const response = await fetch('/api/bug-tracking-config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    bugSourceLabel,
+                    productionKeywords: productionSourceKeywords,
+                    qaKeywords: qaSourceKeywords,
+                }),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+                setBugTrackingResult(`Save failed: ${data.error || 'Unknown error'}`);
+            } else {
+                setBugTrackingConfigured(true);
+                setBugTrackingResult('Bug tracking settings saved.');
+            }
+        } catch (error) {
+            setBugTrackingResult(`Save failed: ${String(error)}`);
+        } finally {
+            setBugTrackingBusy(false);
+        }
+    };
+
     return (
         <div>
             <div className="page-header" style={{ paddingBottom: 20 }}>
@@ -241,6 +298,74 @@ export default function SettingsPage() {
                             Save in Browser
                         </button>
                     </div>
+                </div>
+
+                <div id="bug-tracking" className="card" style={{ scrollMarginTop: 90 }}>
+                    <div className="chart-title" style={{ marginBottom: 10 }}>Bug Tracking</div>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>
+                        Configure how bug source labels are interpreted for escape-rate tracking.
+                    </p>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Bug Source Label
+                            </label>
+                            <input
+                                className="input"
+                                value={bugSourceLabel}
+                                onChange={(event) => setBugSourceLabel(event.target.value)}
+                                placeholder="source"
+                            />
+                            <p style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                                The Jira label used to tag where bugs were found. Example: add label 'source:production' or 'source:qa' to bugs in Jira.
+                            </p>
+                        </div>
+
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                Production source keywords
+                            </label>
+                            <input
+                                className="input"
+                                value={productionSourceKeywords}
+                                onChange={(event) => setProductionSourceKeywords(event.target.value)}
+                                placeholder="production, prod, client-reported, escaped"
+                            />
+                            <p style={{ marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}>
+                                Comma-separated label values that indicate a bug was found in production.
+                            </p>
+                        </div>
+
+                        <div>
+                            <label style={{ display: 'block', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4 }}>
+                                QA source keywords
+                            </label>
+                            <input
+                                className="input"
+                                value={qaSourceKeywords}
+                                onChange={(event) => setQaSourceKeywords(event.target.value)}
+                                placeholder="qa, testing, internal, caught-in-qa"
+                            />
+                        </div>
+                    </div>
+
+                    <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <button className="btn btn-primary btn-sm" onClick={saveBugTrackingConfig} disabled={bugTrackingBusy}>
+                            Save Bug Tracking Settings
+                        </button>
+                        {bugTrackingConfigured && (
+                            <span className="badge" style={{ background: 'rgba(16,185,129,0.14)', color: '#10b981', border: '1px solid rgba(16,185,129,0.35)' }}>
+                                Configured
+                            </span>
+                        )}
+                    </div>
+
+                    {bugTrackingResult && (
+                        <div style={{ marginTop: 8, fontSize: 12, color: bugTrackingResult.startsWith('Save failed') ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                            {bugTrackingResult}
+                        </div>
+                    )}
                 </div>
 
                 {syncResult && (

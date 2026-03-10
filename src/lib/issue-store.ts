@@ -3,10 +3,15 @@ import { JiraIssue, DashboardFilters, Sprint } from '@/types';
 import { CLOSED_STATUSES } from './workflow';
 import { isAtRiskIssue } from './filters';
 import { normalizeUtcTimestamp } from './time';
-import {
-    getResolvedStatusesForGroups,
-    isAllWorkflowGroupsSelected,
-} from './workflow-groups';
+import { buildGroupWhereClause } from './analytics';
+
+function normalizeText(value: string | null | undefined): string {
+    return (value || '').trim();
+}
+
+function isJiraKeyLike(value: string | null | undefined): boolean {
+    return /^[A-Z][A-Z0-9]+-\d+$/.test(normalizeText(value));
+}
 
 // ─── Save issues to DB ─────────────────────────────────────────────────────────
 
@@ -65,6 +70,15 @@ export function upsertIssues(issues: JiraIssue[]): void {
       synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
       raw_json = excluded.raw_json
   `);
+    const upsertEpic = db.prepare(`
+    INSERT INTO epics (key, summary, updated_at, source)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET
+      summary = excluded.summary,
+      updated_at = excluded.updated_at,
+      source = excluded.source
+    WHERE epics.updated_at IS NULL OR excluded.updated_at >= epics.updated_at
+  `);
 
     const insertMany = db.transaction((issues: JiraIssue[]) => {
         for (const iss of issues) {
@@ -80,6 +94,18 @@ export function upsertIssues(issues: JiraIssue[]): void {
                 JSON.stringify(iss.linkedIssues), iss.project, iss.workType, iss.squad, iss.url,
                 JSON.stringify(iss.changelog), JSON.stringify(iss),
             );
+
+            const issueType = normalizeText(iss.issueType).toLowerCase();
+            const issueSummary = normalizeText(iss.summary);
+            if (issueType === 'epic' && issueSummary && !isJiraKeyLike(issueSummary)) {
+                upsertEpic.run(iss.key, issueSummary, iss.updated, 'epic_issue');
+            }
+
+            const epicKey = normalizeText(iss.epicKey);
+            const epicSummary = normalizeText(iss.epicSummary);
+            if (epicKey && epicSummary && !isJiraKeyLike(epicSummary)) {
+                upsertEpic.run(epicKey, epicSummary, iss.updated, 'linked_issue');
+            }
         }
     });
 
@@ -94,52 +120,49 @@ export function queryIssues(filters: DashboardFilters = {}): JiraIssue[] {
     const params: (string | number | null)[] = [];
 
     if (filters.status?.length) {
-        conditions.push(`status IN (${filters.status.map(() => '?').join(',')})`);
+        conditions.push(`i.status IN (${filters.status.map(() => '?').join(',')})`);
         params.push(...filters.status);
     }
-    if (filters.groupFilter?.length && !isAllWorkflowGroupsSelected(filters.groupFilter)) {
-        const groupedStatuses = getResolvedStatusesForGroups(filters.groupFilter).map((status) =>
-            status.toLowerCase()
-        );
-        if (groupedStatuses.length > 0) {
-            conditions.push(`LOWER(status) IN (${groupedStatuses.map(() => '?').join(',')})`);
-            params.push(...groupedStatuses);
+    if (filters.groupFilter?.length) {
+        const groupWhereClause = buildGroupWhereClause(filters.groupFilter);
+        if (groupWhereClause) {
+            conditions.push(groupWhereClause.replace(/^AND\s+/, ''));
         }
     }
     if (filters.issueType?.length) {
-        conditions.push(`issue_type IN (${filters.issueType.map(() => '?').join(',')})`);
+        conditions.push(`i.issue_type IN (${filters.issueType.map(() => '?').join(',')})`);
         params.push(...filters.issueType);
     }
     if (filters.assignee?.length) {
-        conditions.push(`assignee_id IN (${filters.assignee.map(() => '?').join(',')})`);
+        conditions.push(`i.assignee_id IN (${filters.assignee.map(() => '?').join(',')})`);
         params.push(...filters.assignee);
     }
     if (filters.priority?.length) {
-        conditions.push(`priority IN (${filters.priority.map(() => '?').join(',')})`);
+        conditions.push(`i.priority IN (${filters.priority.map(() => '?').join(',')})`);
         params.push(...filters.priority);
     }
     if (filters.sprintId) {
-        conditions.push('sprint_id = ?');
+        conditions.push('i.sprint_id = ?');
         params.push(filters.sprintId);
     } else if (filters.sprint === 'current') {
-        conditions.push("sprint_state = 'active'");
+        conditions.push("i.sprint_state = 'active'");
     } else if (filters.sprint === 'previous') {
-        conditions.push("sprint_state = 'closed'");
+        conditions.push("i.sprint_state = 'closed'");
     } else if (filters.sprint) {
-        conditions.push('sprint_name = ?');
+        conditions.push('i.sprint_name = ?');
         params.push(filters.sprint);
     }
     if (filters.blockedOnly) {
-        conditions.push("status = 'Blocked'");
+        conditions.push("i.status = 'Blocked'");
     }
     if (filters.bugsOnly) {
-        conditions.push("issue_type = 'Bug'");
+        conditions.push("i.issue_type = 'Bug'");
     }
     if (filters.unresolvedOnly) {
-        conditions.push('resolved IS NULL');
+        conditions.push('i.resolved IS NULL');
     }
     if (filters.dateFrom) {
-        conditions.push('created >= ?');
+        conditions.push('i.created >= ?');
         params.push(
             filters.dateFrom.length === 10
                 ? `${filters.dateFrom}T00:00:00.000Z`
@@ -147,7 +170,7 @@ export function queryIssues(filters: DashboardFilters = {}): JiraIssue[] {
         );
     }
     if (filters.dateTo) {
-        conditions.push('created <= ?');
+        conditions.push('i.created <= ?');
         params.push(
             filters.dateTo.length === 10
                 ? `${filters.dateTo}T23:59:59.999Z`
@@ -155,40 +178,63 @@ export function queryIssues(filters: DashboardFilters = {}): JiraIssue[] {
         );
     }
     if (filters.project?.length) {
-        conditions.push(`project IN (${filters.project.map(() => '?').join(',')})`);
+        conditions.push(`i.project IN (${filters.project.map(() => '?').join(',')})`);
         params.push(...filters.project);
     }
     if (filters.label?.length) {
         conditions.push(
-            `(${filters.label.map(() => `labels LIKE '%' || ? || '%'`).join(' OR ')})`
+            `(${filters.label.map(() => `i.labels LIKE '%' || ? || '%'`).join(' OR ')})`
         );
         params.push(...filters.label);
     }
     if (filters.squad?.length) {
-        conditions.push(`squad IN (${filters.squad.map(() => '?').join(',')})`);
+        conditions.push(`i.squad IN (${filters.squad.map(() => '?').join(',')})`);
         params.push(...filters.squad);
     }
     if (filters.epicKey?.length) {
-        conditions.push(`epic_key IN (${filters.epicKey.map(() => '?').join(',')})`);
+        conditions.push(`i.epic_key IN (${filters.epicKey.map(() => '?').join(',')})`);
         params.push(...filters.epicKey);
     }
     if (filters.epicPresence === 'with') {
-        conditions.push('(epic_key IS NOT NULL OR epic_summary IS NOT NULL)');
+        conditions.push('(i.epic_key IS NOT NULL OR i.epic_summary IS NOT NULL)');
     }
     if (filters.epicPresence === 'without') {
-        conditions.push('(epic_key IS NULL AND epic_summary IS NULL)');
+        conditions.push('(i.epic_key IS NULL AND i.epic_summary IS NULL)');
     }
     if (filters.selectedKeys?.length) {
-        conditions.push(`key IN (${filters.selectedKeys.map(() => '?').join(',')})`);
+        conditions.push(`i.key IN (${filters.selectedKeys.map(() => '?').join(',')})`);
         params.push(...filters.selectedKeys);
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const rows = db.prepare(`SELECT raw_json FROM issues ${where} ORDER BY updated DESC`).all(...params) as { raw_json: string }[];
+    const rows = db.prepare(`
+    SELECT
+      i.raw_json as raw_json,
+      i.epic_key as epic_key,
+      i.epic_summary as epic_summary,
+      e.summary as resolved_epic_summary
+    FROM issues i
+    LEFT JOIN epics e ON i.epic_key = e.key
+    ${where}
+    ORDER BY i.updated DESC
+  `).all(...params) as {
+        raw_json: string;
+        epic_key: string | null;
+        epic_summary: string | null;
+        resolved_epic_summary: string | null;
+    }[];
     const parsed = rows.map((row) => {
         const issue = JSON.parse(row.raw_json) as JiraIssue & { dueDate?: string | null };
+        const currentEpicSummary = normalizeText(issue.epicSummary);
+        const resolvedEpicSummary = normalizeText(row.resolved_epic_summary);
+        const shouldUseResolvedSummary =
+            issue.epicKey &&
+            resolvedEpicSummary &&
+            (!currentEpicSummary || currentEpicSummary === normalizeText(issue.epicKey) || isJiraKeyLike(currentEpicSummary));
+
         return {
             ...issue,
+            epicSummary: shouldUseResolvedSummary ? resolvedEpicSummary : issue.epicSummary,
             dueDate: issue.dueDate ?? null,
         };
     });

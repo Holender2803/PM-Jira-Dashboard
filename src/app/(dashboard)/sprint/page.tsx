@@ -3,16 +3,17 @@ import { useEffect, useMemo, useState } from 'react';
 import { JiraIssue } from '@/types';
 import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import { CLOSED_STATUSES } from '@/lib/workflow';
-import { StatCard, ProgressBar } from '@/components/ui/Badges';
+import { PriorityBadge, StatCard, ProgressBar, StatusBadge } from '@/components/ui/Badges';
 import FilterBar from '@/components/filters/FilterBar';
 import IssueTable from '@/components/tables/IssueTable';
+import IssueKeyButton from '@/components/tables/IssueKeyButton';
 import { SprintProgressChart, AssigneeChart } from '@/components/charts/DashboardCharts';
 import VelocityChart from '@/components/charts/VelocityChart';
 import BurndownMiniChart, { BurndownMiniPoint } from '@/components/charts/BurndownMiniChart';
 import CapacityPlanner from '@/components/CapacityPlanner';
 import { getCapacityData, getVelocityTrend, hasStoryPointsCoverage } from '@/lib/analytics';
 import { resolveWorkflowGroup } from '@/lib/statusGroups';
-import { ChevronDown, Filter, X } from 'lucide-react';
+import { ChevronDown, ExternalLink, Filter, X } from 'lucide-react';
 
 interface SyncHistoryRow {
     completedAt: string;
@@ -27,6 +28,12 @@ interface DaysRemainingInfo {
 }
 
 type SprintTicketView = 'open' | 'in_progress' | 'in_review' | 'done';
+
+interface SprintTicketModalState {
+    title: string;
+    subtitle: string;
+    issues: JiraIssue[];
+}
 
 function toValidDate(value?: string | null): Date | null {
     if (!value) return null;
@@ -57,7 +64,7 @@ function issueMatchesView(issue: JiraIssue, view: SprintTicketView): boolean {
         case 'in_progress':
             return workflowGroup === 'In Progress';
         case 'in_review':
-            return workflowGroup === 'Review / QA';
+            return workflowGroup === 'Review/QA';
         case 'done':
             return workflowGroup === 'Done';
         default:
@@ -77,6 +84,8 @@ export default function SprintPage() {
     const [syncHistory, setSyncHistory] = useState<SyncHistoryRow[]>([]);
     const [excludeSubTickets, setExcludeSubTickets] = useState(false);
     const [selectedTicketViews, setSelectedTicketViews] = useState<SprintTicketView[]>([]);
+    const [activeSprintTicketModal, setActiveSprintTicketModal] = useState<SprintTicketModalState | null>(null);
+    const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
 
     const sprints = useMemo(
         () =>
@@ -168,13 +177,13 @@ export default function SprintPage() {
 
         const daysRemaining = Math.max(
             0,
-            Math.ceil((sprintEndDate.getTime() - Date.now()) / dayMs)
+            Math.ceil((sprintEndDate.getTime() - nowTimestamp) / dayMs)
         );
 
         if (daysRemaining > 5) return { value: daysRemaining, display: `${daysRemaining}`, color: '#10b981' };
         if (daysRemaining >= 2) return { value: daysRemaining, display: `${daysRemaining}`, color: '#f59e0b' };
         return { value: daysRemaining, display: `${daysRemaining}`, color: '#ef4444' };
-    }, [dayMs, sprintEndDate]);
+    }, [dayMs, nowTimestamp, sprintEndDate]);
 
     useEffect(() => {
         if (demoMode) return;
@@ -199,6 +208,13 @@ export default function SprintPage() {
         };
     }, [demoMode]);
 
+    useEffect(() => {
+        const timer = window.setInterval(() => {
+            setNowTimestamp(Date.now());
+        }, 60_000);
+        return () => window.clearInterval(timer);
+    }, []);
+
     const burndown = useMemo(() => {
         if (!activeSprint || !sprintStartDate || !sprintEndDate || committed === 0) {
             return { points: [] as BurndownMiniPoint[], hasData: false };
@@ -209,7 +225,7 @@ export default function SprintPage() {
             Math.ceil((sprintEndDate.getTime() - sprintStartDate.getTime()) / dayMs) + 1
         );
 
-        const sprintWindowEnd = new Date(Math.min(Date.now(), sprintEndDate.getTime()));
+        const sprintWindowEnd = new Date(Math.min(nowTimestamp, sprintEndDate.getTime()));
         const snapshotDays = new Map<number, Date>();
         for (const row of syncHistory) {
             const syncDate = toValidDate(row.completedAt);
@@ -256,7 +272,7 @@ export default function SprintPage() {
         }
 
         return { points, hasData: true };
-    }, [activeSprint, committed, dayMs, sprintEndDate, sprintIssues, sprintStartDate, syncHistory]);
+    }, [activeSprint, committed, dayMs, nowTimestamp, sprintEndDate, sprintIssues, sprintStartDate, syncHistory]);
 
     const carryOverPrediction = useMemo(() => {
         if (!sprintStartDate || !sprintEndDate) {
@@ -276,7 +292,7 @@ export default function SprintPage() {
             0,
             Math.min(
                 sprintLengthDays,
-                Math.ceil((Date.now() - sprintStartDate.getTime()) / dayMs)
+                Math.ceil((nowTimestamp - sprintStartDate.getTime()) / dayMs)
             )
         );
         const threshold = Math.max(0, sprintLengthDays - daysElapsed);
@@ -288,7 +304,7 @@ export default function SprintPage() {
             .sort((a, b) => b.age - a.age);
 
         return { rows, sprintLengthDays, daysElapsed, threshold };
-    }, [dayMs, sprintEndDate, sprintIssues, sprintStartDate]);
+    }, [dayMs, nowTimestamp, sprintEndDate, sprintIssues, sprintStartDate]);
 
     // Status breakdown
     const byStatus: Record<string, number> = {};
@@ -334,6 +350,41 @@ export default function SprintPage() {
         },
         [excludeSubTickets, selectedTicketViews, sprintIssues]
     );
+
+    const carryOverRiskIssues = useMemo(
+        () =>
+            notDone.filter(
+                (issue) =>
+                    issue.status !== 'In Progress'
+                    && !['In Review', 'Reviewed'].includes(issue.status)
+                    && !['Ready for QA', 'In QA'].includes(issue.status)
+            ),
+        [notDone]
+    );
+    const carryOverRiskCount = carryOverRiskIssues.length;
+
+    const openSprintTicketModal = (title: string, issues: JiraIssue[], sortByResolvedDate = false) => {
+        const sortedIssues = [...issues].sort((a, b) => {
+            if (sortByResolvedDate) {
+                return (b.resolved || b.updated).localeCompare(a.resolved || a.updated);
+            }
+            return b.age - a.age;
+        });
+        setActiveSprintTicketModal({
+            title,
+            subtitle: `${sortedIssues.length} ticket${sortedIssues.length === 1 ? '' : 's'}${activeSprint ? ` · ${activeSprint.name}` : ''}`,
+            issues: sortedIssues,
+        });
+    };
+
+    useEffect(() => {
+        if (!activeSprintTicketModal) return;
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') setActiveSprintTicketModal(null);
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [activeSprintTicketModal]);
 
     return (
         <div>
@@ -431,14 +482,31 @@ export default function SprintPage() {
 
                 {/* Key metrics */}
                 <div className="dashboard-grid grid-4">
-                    <StatCard label="Committed" value={committed} color="#6366f1" />
-                    <StatCard label="Completed" value={completed} color="#10b981" change={prevRate > 0 ? completionRate - prevRate : undefined} />
+                    <StatCard
+                        label="Committed"
+                        value={committed}
+                        color="#6366f1"
+                        onClick={() => openSprintTicketModal('Committed Tickets', sprintIssues)}
+                    />
+                    <StatCard
+                        label="Completed"
+                        value={completed}
+                        color="#10b981"
+                        change={prevRate > 0 ? completionRate - prevRate : undefined}
+                        onClick={() => openSprintTicketModal('Completed Tickets', done, true)}
+                    />
                     <StatCard
                         label="Story Points Done"
                         value={committedPts > 0 ? `${completedPts}/${committedPts}` : completedPts}
                         color="#8b5cf6"
+                        onClick={() => openSprintTicketModal('Story Points Done Tickets', done)}
                     />
-                    <StatCard label="Carry-over Risk" value={notDone.length - inProgress.length - inReview.length - inQA.length} color={blocked.length > 0 ? '#ef4444' : '#64748b'} />
+                    <StatCard
+                        label="Carry-over Risk"
+                        value={carryOverRiskCount}
+                        color={blocked.length > 0 ? '#ef4444' : '#64748b'}
+                        onClick={() => openSprintTicketModal('Carry-over Risk Tickets', carryOverRiskIssues)}
+                    />
                 </div>
 
                 <VelocityChart data={velocityTrend} />
@@ -513,7 +581,21 @@ export default function SprintPage() {
                                 <tbody>
                                     {carryOverPrediction.rows.slice(0, 20).map((issue) => (
                                         <tr key={issue.key}>
-                                            <td style={{ color: 'var(--accent-light)', fontWeight: 600 }}>{issue.key}</td>
+                                            <td>
+                                                <IssueKeyButton
+                                                    issue={issue}
+                                                    className="btn btn-ghost btn-sm"
+                                                    style={{
+                                                        padding: 0,
+                                                        color: 'var(--accent-light)',
+                                                        fontWeight: 600,
+                                                        fontFamily: 'monospace',
+                                                        fontSize: 12,
+                                                    }}
+                                                >
+                                                    {issue.key}
+                                                </IssueKeyButton>
+                                            </td>
                                             <td>
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 420 }}>
@@ -689,6 +771,147 @@ export default function SprintPage() {
                     <IssueTable issues={tableIssues} showStoryPoints showDueDate showResolution />
                 </div>
             </div>
+
+            {activeSprintTicketModal && (
+                <div
+                    className="drawer-overlay"
+                    style={{ zIndex: 1200 }}
+                    onClick={() => setActiveSprintTicketModal(null)}
+                >
+                    <div
+                        className="card"
+                        style={{
+                            width: 'min(1120px, calc(100vw - 64px))',
+                            maxHeight: 'min(82vh, 820px)',
+                            overflow: 'hidden',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            margin: '0 auto',
+                            marginTop: '9vh',
+                        }}
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <div
+                            style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                borderBottom: '1px solid var(--border)',
+                                padding: '14px 18px',
+                            }}
+                        >
+                            <div>
+                                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                                    {activeSprintTicketModal.title}
+                                </div>
+                                <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                                    {activeSprintTicketModal.subtitle}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                onClick={() => setActiveSprintTicketModal(null)}
+                                aria-label="Close modal"
+                                title="Close"
+                            >
+                                <X size={14} />
+                            </button>
+                        </div>
+
+                        <div style={{ overflow: 'auto' }}>
+                            <div className="table-wrapper" style={{ border: 0, borderRadius: 0 }}>
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Key</th>
+                                            <th>Summary</th>
+                                            <th>Assignee</th>
+                                            <th>Priority</th>
+                                            <th>Status</th>
+                                            <th>Age</th>
+                                            <th style={{ width: 60 }}></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {activeSprintTicketModal.issues.map((issue) => (
+                                            <tr key={`${activeSprintTicketModal.title}-${issue.key}`}>
+                                                <td
+                                                    style={{
+                                                        fontFamily: 'monospace',
+                                                        fontSize: 12,
+                                                        color: 'var(--accent-light)',
+                                                        fontWeight: 600,
+                                                        whiteSpace: 'nowrap',
+                                                    }}
+                                                >
+                                                    <IssueKeyButton
+                                                        issue={issue}
+                                                        className="btn btn-ghost btn-sm"
+                                                        style={{
+                                                            padding: 0,
+                                                            fontFamily: 'monospace',
+                                                            fontSize: 12,
+                                                            color: 'var(--accent-light)',
+                                                            fontWeight: 600,
+                                                        }}
+                                                    >
+                                                        {issue.key}
+                                                    </IssueKeyButton>
+                                                </td>
+                                                <td style={{ maxWidth: 520 }}>
+                                                    <span
+                                                        style={{
+                                                            overflow: 'hidden',
+                                                            textOverflow: 'ellipsis',
+                                                            whiteSpace: 'nowrap',
+                                                            display: 'block',
+                                                        }}
+                                                    >
+                                                        {issue.summary}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                                        {issue.assignee?.displayName || 'Unassigned'}
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <PriorityBadge priority={issue.priority} />
+                                                </td>
+                                                <td>
+                                                    <StatusBadge status={issue.status} size="sm" />
+                                                </td>
+                                                <td>
+                                                    <span style={{ color: 'var(--text-muted)', fontWeight: 600, fontSize: 12 }}>
+                                                        {issue.age}d
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <a
+                                                        href={issue.url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{ color: 'var(--text-muted)', display: 'inline-flex', padding: 4 }}
+                                                    >
+                                                        <ExternalLink size={13} />
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+
+                                {activeSprintTicketModal.issues.length === 0 && (
+                                    <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                                        No tickets in this slice for the current sprint scope.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

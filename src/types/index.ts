@@ -10,9 +10,9 @@ export type WorkflowGroup =
     | 'Backlog'
     | 'Planning'
     | 'In Progress'
-    | 'Review / QA'
+    | 'Review/QA'
     | 'Awaiting'
-    | 'Blocked / Hold'
+    | 'Blocked/Hold'
     | 'Done';
 
 export type WorkflowStage =

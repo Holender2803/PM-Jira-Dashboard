@@ -8,6 +8,7 @@ import {
     StatusChart, IssueTypePieChart, WorkflowFunnelChart, AssigneeChart
 } from '@/components/charts/DashboardCharts';
 import IssueTable from '@/components/tables/IssueTable';
+import IssueKeyButton from '@/components/tables/IssueKeyButton';
 import { CheckCircle, AlertTriangle, TrendingUp, Zap, Bug, Clock, Layers, RefreshCw, Minimize2, Maximize2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { formatTimeForDisplay } from '@/lib/time';
@@ -538,7 +539,19 @@ No lists, no headers, plain sentences only.
                             {releaseReady.slice(0, 4).map(i => (
                                 <div key={i.key} style={{ padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 12 }}>
                                     <div style={{ color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.summary}</div>
-                                    <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 2 }}>{i.key}</div>
+                                    <IssueKeyButton
+                                        issue={i}
+                                        className="btn btn-ghost btn-sm"
+                                        style={{
+                                            padding: 0,
+                                            marginTop: 2,
+                                            fontSize: 11,
+                                            color: 'var(--text-muted)',
+                                            fontFamily: 'monospace',
+                                        }}
+                                    >
+                                        {i.key}
+                                    </IssueKeyButton>
                                 </div>
                             ))}
                             {releaseReady.length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No release-ready tickets yet</p>}

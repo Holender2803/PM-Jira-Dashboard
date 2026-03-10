@@ -1,7 +1,8 @@
 'use client';
 
-import { Info, Minus, TrendingDown, TrendingUp } from 'lucide-react';
+import { ExternalLink, Info, Minus, TrendingDown, TrendingUp } from 'lucide-react';
 import { ReopenRateMetrics } from '@/lib/analytics';
+import IssueKeyButton from '@/components/tables/IssueKeyButton';
 
 interface ReopenRateCardProps {
     data: ReopenRateMetrics;
@@ -84,15 +85,32 @@ export default function ReopenRateCard({ data }: ReopenRateCardProps) {
                             }}
                         >
                             <div style={{ minWidth: 0 }}>
-                                <a
-                                    href={ticket.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    style={{ fontSize: 12, fontWeight: 600, color: 'var(--accent-light)', textDecoration: 'none' }}
-                                    title="Open in Jira"
-                                >
-                                    {ticket.key}
-                                </a>
+                                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                    <IssueKeyButton
+                                        issueKey={ticket.key}
+                                        jiraUrl={ticket.url}
+                                        className="btn btn-ghost btn-sm"
+                                        style={{
+                                            padding: 0,
+                                            fontSize: 12,
+                                            fontWeight: 600,
+                                            color: 'var(--accent-light)',
+                                            fontFamily: 'monospace',
+                                        }}
+                                    >
+                                        {ticket.key}
+                                    </IssueKeyButton>
+                                    <a
+                                        href={ticket.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ color: 'var(--text-muted)', display: 'inline-flex' }}
+                                        aria-label={`Open ${ticket.key} in Jira`}
+                                        title="Open in Jira"
+                                    >
+                                        <ExternalLink size={12} />
+                                    </a>
+                                </div>
                                 <div
                                     style={{
                                         marginTop: 2,

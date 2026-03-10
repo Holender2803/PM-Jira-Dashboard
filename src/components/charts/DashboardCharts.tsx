@@ -455,21 +455,54 @@ export function AgingAreaChart({ issues }: { issues: JiraIssue[] }) {
 }
 
 // ─── Bug trend line ────────────────────────────────────────────────────────────
-export function BugPriorityChart({ issues }: { issues: JiraIssue[] }) {
+export function BugPriorityChart({
+    issues,
+    onPriorityClick,
+}: {
+    issues: JiraIssue[];
+    onPriorityClick?: (priority: 'Emergency' | 'High' | 'Medium' | 'Low' | 'None') => void;
+}) {
     const bugs = issues.filter(i => i.issueType === 'Bug');
-    const byPriority: Record<string, number> = {};
+    const byPriority: Record<string, number> = {
+        Emergency: 0,
+        High: 0,
+        Medium: 0,
+        Low: 0,
+        None: 0,
+    };
+
+    const toPriorityBucket = (priority: string | null | undefined): 'Emergency' | 'High' | 'Medium' | 'Low' | 'None' => {
+        const normalized = (priority || '').trim().toLowerCase();
+        if (!normalized) return 'None';
+        if (
+            normalized.includes('emergency') ||
+            normalized.includes('critical') ||
+            normalized.includes('blocker') ||
+            normalized.includes('highest')
+        ) {
+            return 'Emergency';
+        }
+        if (normalized.includes('high')) return 'High';
+        if (normalized.includes('medium')) return 'Medium';
+        if (normalized.includes('low') || normalized.includes('lowest')) return 'Low';
+        return 'None';
+    };
+
     bugs.forEach(i => {
-        const p = i.priority || 'Unknown';
+        const p = toPriorityBucket(i.priority);
         byPriority[p] = (byPriority[p] || 0) + 1;
     });
 
-    const PRIORITY_ORDER = ['Highest', 'High', 'Medium', 'Low', 'Lowest'];
+    const PRIORITY_ORDER = ['Emergency', 'High', 'Medium', 'Low', 'None'];
     const PRIORITY_COLORS_MAP: Record<string, string> = {
-        Highest: '#ef4444', High: '#f97316', Medium: '#f59e0b', Low: '#22c55e', Lowest: '#64748b',
+        Emergency: '#ef4444',
+        High: '#f97316',
+        Medium: '#eab308',
+        Low: '#3b82f6',
+        None: '#64748b',
     };
 
     const data = PRIORITY_ORDER
-        .filter(p => byPriority[p])
         .map(p => ({ name: p, count: byPriority[p], fill: PRIORITY_COLORS_MAP[p] }));
 
     return (
@@ -480,7 +513,16 @@ export function BugPriorityChart({ issues }: { issues: JiraIssue[] }) {
                     <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} axisLine={false} tickLine={false} />
                     <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(99,102,241,0.05)' }} />
-                    <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                    <Bar
+                        dataKey="count"
+                        radius={[4, 4, 0, 0]}
+                        onClick={(entry) => {
+                            const priority = entry?.name as 'Emergency' | 'High' | 'Medium' | 'Low' | 'None' | undefined;
+                            if (!priority || !onPriorityClick) return;
+                            onPriorityClick(priority);
+                        }}
+                        style={onPriorityClick ? { cursor: 'pointer' } : undefined}
+                    >
                         {data.map((d, i) => <Cell key={i} fill={d.fill} />)}
                     </Bar>
                 </BarChart>

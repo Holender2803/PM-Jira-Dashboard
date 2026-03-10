@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import { endOfWeek, format, parseISO, startOfWeek, differenceInCalendarDays } from 'date-fns';
 import { useAppStore } from '@/store/app-store';
 import {
@@ -13,10 +13,11 @@ import { ALL_STATUSES } from '@/lib/workflow';
 import { X, Filter, ChevronDown, Search, ExternalLink } from 'lucide-react';
 import { formatEpicLabelFromParts, isEpicIssue } from '@/lib/issue-format';
 import {
+    GROUP_COLORS,
     isAllWorkflowGroupsSelected,
     WORKFLOW_ACTIVE_ONLY_GROUPS,
     WORKFLOW_GROUP_ORDER,
-} from '@/lib/workflow-groups';
+} from '@/lib/statusGroups';
 
 const TYPES: IssueType[] = [
     'Bug',
@@ -51,6 +52,15 @@ interface FilterDropdownProps {
     options: SearchOption[];
     value?: string;
     onSelect: (value?: string) => void;
+}
+
+function getWorkflowGroupChipStyle(group: WorkflowGroup, active: boolean): CSSProperties {
+    const palette = GROUP_COLORS[group];
+    return {
+        background: active ? palette.bg : 'rgba(15, 23, 42, 0.45)',
+        borderColor: palette.border,
+        color: palette.text,
+    };
 }
 
 function FilterDropdown({
@@ -596,7 +606,8 @@ export default function FilterBar({ showSprintFilter = true }: FilterBarProps) {
                         return (
                             <button
                                 key={group}
-                                className={`workflow-group-chip ${active ? 'is-active' : ''}`}
+                                className="workflow-group-chip"
+                                style={getWorkflowGroupChipStyle(group, active)}
                                 onClick={() => toggleWorkflowGroup(group)}
                                 title={active ? `Hide ${group}` : `Show ${group}`}
                             >
