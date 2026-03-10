@@ -76,7 +76,7 @@ export async function POST(request: Request) {
                 const from = new Date(lastUpdated.getTime() - 6 * 60 * 60 * 1000);
                 effectiveJql = appendJqlClause(
                     effectiveJql,
-                    `updated >= "${formatJqlDate(from)}"`
+                    `updated >= "${formatJqlDate(from)}" OR sprint in openSprints()`
                 );
             }
         }

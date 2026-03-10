@@ -59,6 +59,8 @@ const TYPE_ICONS: Record<string, string> = {
     'Feature': '✨',
     'Epic': '⚡',
     'Subtask': '↳',
+    'Sub-task': '↳',
+    'Test Sub-task': '🧪',
     'Technical Task': '🔧',
     'Spike': '🔍',
     'Developer Request': '💻',
@@ -134,12 +136,24 @@ interface StatCardProps {
     icon?: React.ReactNode;
     suffix?: string;
     onClick?: () => void;
+    className?: string;
+    style?: React.CSSProperties;
 }
-export function StatCard({ label, value, change, color = '#6366f1', icon, suffix, onClick }: StatCardProps) {
+export function StatCard({
+    label,
+    value,
+    change,
+    color = '#6366f1',
+    icon,
+    suffix,
+    onClick,
+    className,
+    style,
+}: StatCardProps) {
     return (
         <div
-            className="stat-card"
-            style={{ '--stat-color': color, cursor: onClick ? 'pointer' : 'default' } as React.CSSProperties}
+            className={`stat-card${className ? ` ${className}` : ''}`}
+            style={{ '--stat-color': color, cursor: onClick ? 'pointer' : 'default', ...style } as React.CSSProperties}
             onClick={onClick}
             role={onClick ? 'button' : undefined}
         >

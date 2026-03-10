@@ -15,6 +15,29 @@ const REPORT_PROMPTS: Record<string, string> = {
     release_notes: 'Write release notes for the completed and release-ready tickets. Group by feature area. Write for a technical but non-developer audience.',
     blockers_summary: 'Summarize all blockers and at-risk items. For each, describe what\'s blocked and suggest possible actions.',
     selected_tickets: 'Generate a concise summary of the selected tickets. Include: status, key achievements, current risks, what\'s still in progress, and suggested PM talking points.',
+    morning_briefing: `You are a PM assistant. Write ONLY 3 sentences.
+No headers. No bullet points. No numbered lists. No sections.
+No markdown. Plain conversational sentences only.
+
+Sentence 1: Sprint health — completion % and days remaining.
+Sentence 2: Biggest risk right now (blockers or carry-over count).
+Sentence 3: The single most important action for today.
+
+Example output:
+"Sprint MDFM 26.05 is 59% complete with 3 days remaining.
+12 tickets are at carry-over risk and 5 are blocked —
+the longest blocked for 220 days.
+Top priority today: escalate the MDFM UI uplift blocker
+with Samuel before end of day."
+
+If days remaining is 0 or unavailable, say "sprint end date
+not configured" instead of "0 days remaining".
+NEVER use numbered lists, headers, or section titles.
+Output the 3 sentences and nothing else.`,
+};
+
+const MAX_TOKENS: Record<string, number> = {
+    morning_briefing: 150,
 };
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
@@ -109,7 +132,15 @@ Age: ${iss.age} days | Cycle Time: ${iss.cycleTime !== null ? iss.cycleTime + ' 
 ${iss.description ? `Description: ${extractDescriptionText(iss.description).slice(0, 300)}` : ''}
 `).join('\n---\n');
 
-        const systemPrompt = `You are a productivity assistant specialized in helping Product Managers communicate sprint progress, delivery status, and team updates.
+        const isMorningBriefing = type === 'morning_briefing';
+        const formatGuide = isMorningBriefing ? '' : CONFLUENCE_FORMAT_GUIDE;
+        const maxTokens = MAX_TOKENS[type] || 1500;
+        const effectiveTemperature = isMorningBriefing ? 0.3 : 0.7;
+        const criticalMorningPrefix = isMorningBriefing
+            ? 'CRITICAL: Output exactly 3 sentences. Stop after the third sentence. Do not output ticket keys, lists, headers, or any text after the third sentence ends with a period.'
+            : '';
+
+        const systemPrompt = `${criticalMorningPrefix ? `${criticalMorningPrefix}\n` : ''}You are a productivity assistant specialized in helping Product Managers communicate sprint progress, delivery status, and team updates.
 
 Team: MDFM / Legacy MDFM Engineering Team
 Sprint Cadence: 2-week sprints
@@ -118,11 +149,13 @@ ${sprintName ? `Current Sprint: ${sprintName}` : ''}
 TONE: ${TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.pm_internal}
 
 TASK: ${REPORT_PROMPTS[type] || REPORT_PROMPTS.selected_tickets}
-${CONFLUENCE_FORMAT_GUIDE}
+${formatGuide}
 
 ${customInstructions ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}` : ''}`;
 
-        const userPrompt = `Here are the Jira tickets to analyze:\n\n${issueContext}\n\nPlease generate the requested ${type.replace('_', ' ')}.`;
+        const userPrompt = isMorningBriefing
+            ? (customInstructions || 'Write the 3-sentence morning briefing now. No lists, no headers, plain sentences only.')
+            : `Here are the Jira tickets to analyze:\n\n${issueContext}\n\nPlease generate the requested ${type.replace('_', ' ')}.`;
 
         // Check if AI provider is configured
         const aiConfig = resolveAIClientConfig();
@@ -149,8 +182,8 @@ ${customInstructions ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}` : ''}`;
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt },
             ],
-            temperature: 0.7,
-            max_tokens: 1500,
+            temperature: effectiveTemperature,
+            max_tokens: maxTokens,
         });
 
         const content = completion.choices[0]?.message?.content || 'No response generated.';

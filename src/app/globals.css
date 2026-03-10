@@ -815,9 +815,22 @@ tbody tr { transition: background 0.1s; }
 .animate-fade-in { animation: fadeIn 0.3s ease; }
 .animate-slide-in { animation: slideIn 0.3s ease; }
 
+.briefing-skeleton-line {
+  height: 10px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.14), rgba(99, 102, 241, 0.3), rgba(99, 102, 241, 0.14));
+  background-size: 220% 100%;
+  animation: briefingShimmer 1.15s linear infinite;
+}
+
 @keyframes slideIn {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes briefingShimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -20% 0; }
 }
 
 /* ─── Demo banner ───────────────────────────────────────────────────────────── */

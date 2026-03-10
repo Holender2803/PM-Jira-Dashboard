@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getDemoIssues, getDemoSprints } from '@/lib/demo-data';
-import { queryIssues, getActiveSprints, getLastSyncedAt, getTotalIssues } from '@/lib/issue-store';
+import {
+    queryIssues,
+    getActiveSprints,
+    getActiveSprintEndDate,
+    getLastSyncedAt,
+    getTotalIssues,
+} from '@/lib/issue-store';
 import { DashboardFilters } from '@/types';
 import { filterIssues } from '@/lib/filters';
 
@@ -65,10 +71,24 @@ export async function GET(request: Request) {
 
         const issues = queryIssues(filters);
         const sprints = getActiveSprints();
+        const activeSprintEndDate = getActiveSprintEndDate();
+        const normalizedSprints = sprints.map((sprint) => {
+            if (sprint.state === 'active' && !sprint.endDate && activeSprintEndDate) {
+                return { ...sprint, endDate: activeSprintEndDate };
+            }
+            return sprint;
+        });
         const lastSynced = getLastSyncedAt();
         const total = getTotalIssues();
 
-        return NextResponse.json({ issues, total, lastSynced, sprints, demoMode: false });
+        return NextResponse.json({
+            issues,
+            total,
+            lastSynced,
+            sprints: normalizedSprints,
+            activeSprintEndDate,
+            demoMode: false,
+        });
     } catch (error) {
         console.error('Issues API error:', error);
         return NextResponse.json({ error: String(error) }, { status: 500 });

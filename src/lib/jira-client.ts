@@ -11,6 +11,14 @@ interface JiraClientConfig {
     jql?: string;
 }
 
+interface JiraFieldMeta {
+    id?: string;
+    name?: string;
+    schema?: {
+        custom?: string;
+    };
+}
+
 function makeAuthHeader(email: string, apiToken: string): string {
     return 'Basic ' + Buffer.from(`${email}:${apiToken}`).toString('base64');
 }
@@ -167,8 +175,76 @@ function parseSprint(sprintField: unknown): Sprint | null {
     };
 }
 
+function coerceNumeric(value: unknown): number | null {
+    if (value === null || value === undefined || value === '') return null;
+
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+
+    if (typeof value === 'string') {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    if (typeof value === 'object' && value && 'value' in value) {
+        return coerceNumeric((value as { value?: unknown }).value);
+    }
+
+    return null;
+}
+
+function resolveStoryPoints(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    fields: any,
+    storyPointFieldKeys: string[]
+): number | null {
+    const dynamicCandidates = storyPointFieldKeys
+        .map((fieldKey) => fields[fieldKey])
+        .filter((value) => value !== undefined);
+
+    const fallbackCandidates = [
+        fields['customfield_10016'],
+        fields['customfield_10028'],
+        fields['story_points'],
+    ];
+
+    for (const candidate of [...dynamicCandidates, ...fallbackCandidates]) {
+        const parsed = coerceNumeric(candidate);
+        if (parsed !== null) return parsed;
+    }
+
+    return null;
+}
+
+async function detectStoryPointFieldKeys(config: JiraClientConfig): Promise<string[]> {
+    try {
+        const data = await jiraFetch(config, '/field');
+        if (!Array.isArray(data)) return [];
+
+        const matched = data
+            .filter((field): field is JiraFieldMeta => !!field && typeof field === 'object')
+            .filter((field) => {
+                const id = String(field.id || '');
+                if (!id.startsWith('customfield_')) return false;
+
+                const name = String(field.name || '').toLowerCase();
+                const schemaCustom = String(field.schema?.custom || '').toLowerCase();
+                return (
+                    name.includes('story point') ||
+                    (schemaCustom.includes('story') && schemaCustom.includes('point'))
+                );
+            })
+            .map((field) => String(field.id));
+
+        return [...new Set(matched)];
+    } catch {
+        return [];
+    }
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function parseIssue(raw: any, baseUrl: string): JiraIssue {
+function parseIssue(raw: any, baseUrl: string, storyPointFieldKeys: string[] = []): JiraIssue {
     const fields = raw.fields;
     const changelog = parseChangelog(raw.changelog?.histories || []);
 
@@ -177,11 +253,7 @@ function parseIssue(raw: any, baseUrl: string): JiraIssue {
     const sprint = parseSprint(
         fields['customfield_10020'] || fields['sprint'] || null
     );
-    const storyPoints =
-        fields['customfield_10016'] ||
-        fields['customfield_10028'] ||
-        fields['story_points'] ||
-        null;
+    const storyPoints = resolveStoryPoints(fields, storyPointFieldKeys);
 
     const squad =
         fields['customfield_10023']?.child?.value ||
@@ -227,10 +299,11 @@ function parseIssue(raw: any, baseUrl: string): JiraIssue {
         epicKey,
         epicSummary,
         sprint,
-        storyPoints: storyPoints ? Number(storyPoints) : null,
+        storyPoints,
         created: fields.created,
         updated: fields.updated,
         resolved: fields.resolutiondate || null,
+        resolution: fields.resolution?.name || null,
         dueDate: fields.duedate || null,
         changelog,
         commentsCount: fields.comment?.total || 0,
@@ -253,14 +326,17 @@ export async function fetchAllIssues(
     onProgress?: (fetched: number, total: number) => void
 ): Promise<JiraIssue[]> {
     const jql = config.jql || DEFAULT_JQL;
+    const discoveredStoryPointFields = await detectStoryPointFieldKeys(config);
     const fields = [
         'summary', 'description', 'status', 'issuetype', 'priority',
         'assignee', 'reporter', 'labels', 'components', 'parent',
         'customfield_10011', 'customfield_10014', 'customfield_10016', 'customfield_10020',
         'customfield_10023', 'customfield_10028', 'customfield_10087',
-        'sprint', 'story_points', 'created', 'updated', 'resolutiondate', 'duedate',
+        ...discoveredStoryPointFields,
+        'sprint', 'story_points', 'created', 'updated', 'resolutiondate', 'resolution', 'duedate',
         'comment', 'issuelinks', 'project', 'epic', 'worktype',
     ];
+    const uniqueFields = [...new Set(fields)];
     const expand = ['changelog'];
     const maxResults = 100;
     let nextPageToken: string | undefined;
@@ -273,7 +349,7 @@ export async function fetchAllIssues(
     for (let page = 0; page < 1000; page++) {
         const params: Record<string, string | string[] | undefined> = {
             jql,
-            fields,
+            fields: uniqueFields,
             expand,
             maxResults: String(maxResults),
             nextPageToken,
@@ -295,6 +371,8 @@ export async function fetchAllIssues(
                 method: 'GET',
                 params: {
                     jql,
+                    fields: uniqueFields.join(','),
+                    expand: 'changelog',
                     maxResults: String(maxResults),
                     nextPageToken,
                 },
@@ -308,7 +386,7 @@ export async function fetchAllIssues(
             const issueId = String(raw.id || raw.key || '');
             if (issueId && seenIssueIds.has(issueId)) continue;
             if (issueId) seenIssueIds.add(issueId);
-            allIssues.push(parseIssue(raw, config.baseUrl));
+            allIssues.push(parseIssue(raw, config.baseUrl, discoveredStoryPointFields));
             addedThisPage += 1;
         }
 
@@ -340,13 +418,16 @@ export async function fetchAllIssues(
 // ─── Fetch single issue ───────────────────────────────────────────────────────
 
 export async function fetchIssue(config: JiraClientConfig, key: string): Promise<JiraIssue> {
+    const discoveredStoryPointFields = await detectStoryPointFieldKeys(config);
     const data = await jiraFetch(config, `/issue/${key}`, {
         params: {
             fields: '*all',
             expand: 'changelog',
         },
     });
-    return enrichIssuesWithEpicSummaries([parseIssue(data, config.baseUrl)])[0];
+    return enrichIssuesWithEpicSummaries([
+        parseIssue(data, config.baseUrl, discoveredStoryPointFields),
+    ])[0];
 }
 
 // ─── Test connection ──────────────────────────────────────────────────────────

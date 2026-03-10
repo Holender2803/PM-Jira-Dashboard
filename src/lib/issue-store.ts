@@ -215,6 +215,30 @@ export function getActiveSprints(): Sprint[] {
     return rows;
 }
 
+export function getActiveSprintEndDate(): string | null {
+    const db = getDb();
+
+    const sprintRow = db.prepare(`
+    SELECT end_date as endDate
+    FROM sprints
+    WHERE state = 'active' AND end_date IS NOT NULL
+    ORDER BY end_date DESC
+    LIMIT 1
+  `).get() as { endDate: string | null } | undefined;
+
+    if (sprintRow?.endDate) return sprintRow.endDate;
+
+    const issueRow = db.prepare(`
+    SELECT sprint_end as endDate
+    FROM issues
+    WHERE sprint_state = 'active' AND sprint_end IS NOT NULL
+    ORDER BY sprint_end DESC
+    LIMIT 1
+  `).get() as { endDate: string | null } | undefined;
+
+    return issueRow?.endDate || null;
+}
+
 export function getSprintIssues(sprintId: number): JiraIssue[] {
     return queryIssues({ sprintId });
 }

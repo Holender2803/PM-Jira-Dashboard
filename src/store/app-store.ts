@@ -35,6 +35,7 @@ interface AppState {
     // UI
     sidebarOpen: boolean;
     theme: 'dark' | 'light';
+    storyPointsWarningDismissed: boolean;
 
     // AI Reports
     aiReports: AIReportResponse[];
@@ -53,6 +54,8 @@ interface AppState {
     clearSelection: () => void;
     setSidebarOpen: (v: boolean) => void;
     setTheme: (t: 'dark' | 'light') => void;
+    dismissStoryPointsWarning: () => void;
+    resetStoryPointsWarning: () => void;
     addAIReport: (r: AIReportResponse) => void;
     setSavedViews: (v: SavedView[]) => void;
     applyView: (view: SavedView) => void;
@@ -74,6 +77,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     selectedKeys: new Set(),
     sidebarOpen: true,
     theme: 'dark',
+    storyPointsWarningDismissed: false,
     aiReports: [],
     savedViews: [],
 
@@ -120,6 +124,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     clearSelection: () => set({ selectedKeys: new Set() }),
     setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
     setTheme: (theme) => set({ theme }),
+    dismissStoryPointsWarning: () => set({ storyPointsWarningDismissed: true }),
+    resetStoryPointsWarning: () => set({ storyPointsWarningDismissed: false }),
     addAIReport: (r) => set(s => ({ aiReports: [r, ...s.aiReports] })),
     setSavedViews: (savedViews) => set({ savedViews }),
     applyView: (view) => {

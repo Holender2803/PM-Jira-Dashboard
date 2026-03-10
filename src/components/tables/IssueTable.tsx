@@ -7,20 +7,43 @@ import { ExternalLink, ChevronUp, ChevronDown } from 'lucide-react';
 import IssueDrawer from './IssueDrawer';
 import { formatEpicLabel, isEpicIssue } from '@/lib/issue-format';
 
-type SortKey = 'key' | 'summary' | 'status' | 'assignee' | 'priority' | 'age' | 'updated' | 'storyPoints';
+type SortKey =
+    | 'key'
+    | 'summary'
+    | 'issueType'
+    | 'status'
+    | 'assignee'
+    | 'priority'
+    | 'age'
+    | 'updated'
+    | 'storyPoints'
+    | 'dueDate'
+    | 'resolution';
 
 interface IssueTableProps {
     issues: JiraIssue[];
     selectable?: boolean;
     maxRows?: number;
     compact?: boolean;
+    showStoryPoints?: boolean;
+    showDueDate?: boolean;
+    showResolution?: boolean;
 }
 
-export default function IssueTable({ issues, selectable = true, maxRows, compact = false }: IssueTableProps) {
+export default function IssueTable({
+    issues,
+    selectable = true,
+    maxRows,
+    compact = false,
+    showStoryPoints,
+    showDueDate = false,
+    showResolution = false,
+}: IssueTableProps) {
     const { selectedKeys, toggleSelected } = useAppStore();
     const [sortKey, setSortKey] = useState<SortKey>('updated');
     const [sortAsc, setSortAsc] = useState(false);
     const [drawerIssue, setDrawerIssue] = useState<JiraIssue | null>(null);
+    const displayStoryPoints = showStoryPoints ?? !compact;
 
     const handleSort = (key: SortKey) => {
         if (sortKey === key) setSortAsc(!sortAsc);
@@ -31,12 +54,20 @@ export default function IssueTable({ issues, selectable = true, maxRows, compact
         let va: string | number = '', vb: string | number = '';
         if (sortKey === 'key') { va = a.key; vb = b.key; }
         else if (sortKey === 'summary') { va = a.summary; vb = b.summary; }
+        else if (sortKey === 'issueType') { va = a.issueType || ''; vb = b.issueType || ''; }
         else if (sortKey === 'status') { va = a.status; vb = b.status; }
         else if (sortKey === 'assignee') { va = a.assignee?.displayName || ''; vb = b.assignee?.displayName || ''; }
         else if (sortKey === 'priority') { va = a.priority || ''; vb = b.priority || ''; }
         else if (sortKey === 'age') { va = a.age; vb = b.age; }
         else if (sortKey === 'updated') { va = a.updated; vb = b.updated; }
         else if (sortKey === 'storyPoints') { va = a.storyPoints || 0; vb = b.storyPoints || 0; }
+        else if (sortKey === 'dueDate') {
+            va = a.dueDate ? new Date(a.dueDate).getTime() : -1;
+            vb = b.dueDate ? new Date(b.dueDate).getTime() : -1;
+        } else if (sortKey === 'resolution') {
+            va = a.resolution || '';
+            vb = b.resolution || '';
+        }
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sortAsc ? cmp : -cmp;
     });
@@ -63,7 +94,11 @@ export default function IssueTable({ issues, selectable = true, maxRows, compact
                             <th onClick={() => handleSort('summary')} style={thStyle}>
                                 SUMMARY {renderSortIcon('summary')}
                             </th>
-                            {!compact && <th>TYPE</th>}
+                            {!compact && (
+                                <th onClick={() => handleSort('issueType')} style={thStyle}>
+                                    TYPE {renderSortIcon('issueType')}
+                                </th>
+                            )}
                             <th onClick={() => handleSort('status')} style={thStyle}>
                                 STATUS {renderSortIcon('status')}
                             </th>
@@ -73,9 +108,21 @@ export default function IssueTable({ issues, selectable = true, maxRows, compact
                             <th onClick={() => handleSort('assignee')} style={thStyle}>
                                 ASSIGNEE {renderSortIcon('assignee')}
                             </th>
-                            {!compact && <th onClick={() => handleSort('storyPoints')} style={thStyle}>
-                                PTS {renderSortIcon('storyPoints')}
-                            </th>}
+                            {displayStoryPoints && (
+                                <th onClick={() => handleSort('storyPoints')} style={thStyle}>
+                                    STORY POINTS {renderSortIcon('storyPoints')}
+                                </th>
+                            )}
+                            {showDueDate && (
+                                <th onClick={() => handleSort('dueDate')} style={thStyle}>
+                                    DUE DATE {renderSortIcon('dueDate')}
+                                </th>
+                            )}
+                            {showResolution && (
+                                <th onClick={() => handleSort('resolution')} style={thStyle}>
+                                    RESOLUTION {renderSortIcon('resolution')}
+                                </th>
+                            )}
                             <th onClick={() => handleSort('age')} style={thStyle}>
                                 AGE {renderSortIcon('age')}
                             </th>
@@ -148,9 +195,27 @@ export default function IssueTable({ issues, selectable = true, maxRows, compact
                                         <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
                                     )}
                                 </td>
-                                {!compact && (
+                                {displayStoryPoints && (
                                     <td onClick={() => setDrawerIssue(issue)} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         {issue.storyPoints ?? '—'}
+                                    </td>
+                                )}
+                                {showDueDate && (
+                                    <td onClick={() => setDrawerIssue(issue)} style={{ color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                        {issue.dueDate
+                                            ? new Date(issue.dueDate).toLocaleDateString(undefined, {
+                                                month: 'short',
+                                                day: 'numeric',
+                                                year: 'numeric',
+                                            })
+                                            : '—'}
+                                    </td>
+                                )}
+                                {showResolution && (
+                                    <td onClick={() => setDrawerIssue(issue)} style={{ color: 'var(--text-secondary)', maxWidth: 200 }}>
+                                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', maxWidth: '100%' }}>
+                                            {issue.resolution || '—'}
+                                        </span>
                                     </td>
                                 )}
                                 <td onClick={() => setDrawerIssue(issue)}>

@@ -18,7 +18,20 @@ import {
     WORKFLOW_GROUP_ORDER,
 } from '@/lib/workflow-groups';
 
-const TYPES: IssueType[] = ['Bug', 'Story', 'Task', 'Feature', 'Technical Task', 'Spike', 'Developer Request', 'Support', 'Chore'];
+const TYPES: IssueType[] = [
+    'Bug',
+    'Story',
+    'Task',
+    'Feature',
+    'Technical Task',
+    'Spike',
+    'Developer Request',
+    'Support',
+    'Chore',
+    'Subtask',
+    'Sub-task',
+    'Test Sub-task',
+];
 const PRIORITIES: Priority[] = ['Highest', 'High', 'Medium', 'Low', 'Lowest'];
 
 interface FilterBarProps {
@@ -336,7 +349,13 @@ export default function FilterBar({ showSprintFilter = true }: FilterBarProps) {
     })();
 
     const statusOptions: SearchOption[] = ALL_STATUSES.map((status) => ({ value: status, label: status }));
-    const typeOptions: SearchOption[] = TYPES.map((type) => ({ value: type, label: type }));
+    const allIssueTypes = Array.from(
+        new Set<string>([
+            ...TYPES,
+            ...issues.map((issue) => issue.issueType).filter(Boolean),
+        ])
+    ).sort((a, b) => a.localeCompare(b));
+    const typeOptions: SearchOption[] = allIssueTypes.map((type) => ({ value: type, label: type }));
     const assigneeOptions: SearchOption[] = assignees.map((assignee) => ({ value: assignee.accountId, label: assignee.displayName }));
     const priorityOptions: SearchOption[] = PRIORITIES.map((priority) => ({ value: priority, label: priority }));
     const projectOptions: SearchOption[] = projects.map((project) => ({ value: project, label: project }));

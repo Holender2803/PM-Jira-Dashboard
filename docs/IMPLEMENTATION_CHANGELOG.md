@@ -1,138 +1,105 @@
 # PM Jira Dashboard - Implementation Changelog
 
-This document summarizes the full implementation scope currently included in branch `feature/workflow-visibility-risk`.
+This document summarizes the implementation included in branch `feature/pm-center-plus-fixes` as of March 10, 2026.
 
-## 1) Platform and Data Foundations
-- Added/expanded normalized issue model fields:
-  - `dueDate`
-  - richer changelog/status-derived metrics
-  - workflow-group aware filtering support
-- Updated DB sync timestamp handling to ISO UTC format for consistency.
-- Added robust timestamp normalization/display utilities to avoid timezone drift.
-- Expanded demo data coverage to better represent PM dashboard scenarios.
+## 1) Overview Dashboard - AI Morning Briefing
+- Added a top-level `Today's Briefing` card above KPI cards.
+- Briefing generation calls `POST /api/ai/report` with `type: morning_briefing` and executive tone.
+- Frontend now sends structured sprint context (completion, days remaining, blockers, carry-over risk, longest blocked ticket) instead of raw issue dumps.
+- Added briefing refresh action and loading skeleton.
+- Added collapse/minimize behavior for compact summary view.
+- Added UI hard cap (500 chars) with truncation safety and full-text hover/expand behavior.
 
-## 2) Jira Integration and Sync Reliability
-- Jira search integration updated to modern Cloud endpoint behavior.
-- Sync pipeline supports incremental/full refresh workflows.
-- API responses include normalized issue shapes for dashboard stability.
-- Server-side issue querying supports additional filter dimensions, including workflow-group filtering.
+## 2) AI Report Route and Prompting Controls
+- Updated `morning_briefing` prompt for strict 3-sentence output behavior.
+- Added explicit stop/format constraints to prevent confluence-style structured output.
+- Set `max_tokens` for `morning_briefing` to `150`.
+- Set `temperature` to `0.3` for `morning_briefing` for better instruction adherence.
+- Removed confluence format guidance from the morning briefing path.
 
-## 3) Global Filtering System Enhancements
-- Filter bar upgraded with searchable dropdown behavior and clear controls.
-- Added richer quick filters:
-  - Blocked
-  - Bugs
-  - Unresolved
-  - At Risk
-  - Selected
-  - This Week
-  - Sprint Window
-- Epic controls improved:
-  - `Key - Summary` display
-  - Jira deep-link from selected epic
-- Added global workflow group filtering:
-  - groups: `Backlog`, `Planning`, `In Progress`, `Review / QA`, `Awaiting`, `Blocked / Hold`, `Done`
-  - persisted in Zustand under shared state (`workflowGroupFilter`)
-  - synchronized between local dashboard controls and global filter bar
-  - summary tag shown when group filter is active
+## 3) Shared Status Grouping and Chart Consistency
+- Extracted canonical status-group mapping to shared utility:
+  - `src/lib/statusGroups.ts`
+- Updated Sankey and status-group charts to use the same resolver.
 
-## 4) Workflow Grouping and Status Mapping
-- Introduced canonical workflow-group resolver with alias mapping for heterogeneous Jira statuses.
-- Added hardcoded stage index ordering to make flow analysis consistent.
-- Added helper utilities for:
-  - resolving raw status -> canonical group
-  - generating status lists for SQL/group filters
-  - active-only presets
+### Issues by Status Group
+- Replaced raw status bars with canonical grouped statuses.
+- Added `Include Done` toggle (default OFF) with hidden-done count label.
 
-## 5) Dashboard Additions and Upgrades
+### Workflow Funnel
+- Reworked funnel to emphasize active pipeline stages.
+- Removed `Closed` bar from funnel visualization and added separate closed summary line below chart.
+- Added per-bar tooltip with `X tickets (Y% of total)`.
 
-### Overview
-- Improved sync timestamp rendering and display consistency.
-- Global filtering behavior integrated with new workflow-group model.
+### Work Mix Donut
+- Added slice consolidation logic:
+  - Merge low-percentage non-protected types into `Other`.
+  - Cap named slices to 6 + optional `Other`.
+- Added center label for dominant type and percent.
 
-### Sprint Dashboard
-- Velocity trending added:
-  - completed points/tickets by sprint
-  - rolling 3-sprint average
-- Capacity Planning module added:
-  - committed vs completed
-  - 3-sprint forecast
-  - capacity delta
-  - confidence band
-  - what-if planning input
+### Sprint Completion Donut
+- Updated sprint completion legend to explicit slices:
+  - Done, In Progress, In Review, In QA, Waiting, Blocked, Not Started.
+- Added empty-state fallback (`No sprint data available`) when all slices are zero.
 
-### Focus Dashboard
-- Added Team Load tab and workload card grid.
-- Per-assignee workload metrics include:
-  - open/in-progress points
-  - blocked/overdue signals
-  - overload threshold highlighting
-- Assignee selection ties back to global filter state.
+## 4) Sprint Dashboard - Data Quality and Forecasting
 
-### Workflow Dashboard
-- Added Cycle/Lead time distribution module:
-  - histogram
-  - p50/p75/p95 percentiles
-  - issue-type segmentation
-  - explanatory guidance
-- Added grouped Status Flow Sankey:
-  - canonical 7-group transitions
-  - forward/backward coloring
-  - threshold slider (`Min transitions to show`)
-  - bottleneck mode (source dwell > 2x median)
-  - node ticket counts
-  - hover tooltip for transition details
-  - in-chart legend and sparse-data placeholder behavior
+### Story Points Coverage Warning
+- Added `hasStoryPointsCoverage(...)` utility.
+- Added yellow warning banner under sprint filter area when story point coverage is low.
+- Banner is dismissible per session via Zustand state.
+- `Test Sub-task` issues are excluded from story-point-required coverage checks.
 
-### Bugs Dashboard
-- Reopen Rate analytics added:
-  - reopen detection from status history transitions (closed -> active)
-  - reopen KPI + trend vs prior window
-  - top reopened tickets with Jira links
-- Bugs by area improved with better epic labeling.
+### Days Remaining KPI
+- Added `Days Remaining` indicator next to sprint completion.
+- Color logic:
+  - green (`>5`)
+  - amber (`2-5`)
+  - red (`<=1`)
+  - gray fallback when end date missing.
 
-### Tickets Dashboard
-- Added SLA panel and urgency visualization:
-  - urgency buckets (`Overdue`, `Due Today`, `Due This Week`, `Due Soon`, `On Track`)
-  - at-risk table with sortable columns
-  - assignee breach views
-  - trend chart
+### Burndown Mini-Chart
+- Added `Burndown (Mini)` chart under velocity trend.
+- Added `/api/sync/history` endpoint to source snapshot history from `sync_log`.
+- Added placeholder when historical sync density is insufficient.
 
-### Epics Dashboard
-- Epic display improvements to show `Key - Summary` format consistently where available.
+### Carry-over Prediction
+- Added `Carry-over Prediction` section below capacity planner.
+- Added risk summary text plus at-risk ticket table.
+- Table columns:
+  - Key
+  - Summary
+  - Assignee
+  - Current Status
+  - Days Active
 
-### AI Reports
-- AI report workflow improved for PM weekly storytelling output and copy/paste usage.
+### Sprint Tickets Controls and Columns
+- Added sortable `Type` column support in issue table.
+- Added `Story Points`, `Due Date`, and `Resolution` columns for sprint tickets.
+- Added sprint ticket view filter controls:
+  - `All Tickets`
+  - `Open Tickets`
+  - `In Progress Tickets`
+  - `In Review`
+  - `Done`
+  - `Exclude Sub Tickets` true/false toggle.
+- View selection behavior:
+  - selecting one or more view checkboxes automatically unchecks `All Tickets`
+  - selecting `All Tickets` clears specific view filters and shows full scope.
+- Fixed sub-ticket exclusion so only true sub-task issue types are excluded (not Story/Technical Task).
 
-### Info Page
-- Added guidance explaining dashboard purposes and usage expectations.
+## 5) Jira Sync and Parsing Reliability
+- Story points extraction now dynamically discovers story-point field keys from Jira `/field` metadata.
+- Added numeric coercion for multiple field value shapes.
+- Ensured field list is preserved in fallback search path.
+- Incremental sync now also refreshes `sprint in openSprints()` to avoid stale active sprint data.
+- Added Jira `resolution` ingestion and propagation to UI table.
 
-## 6) Analytics Layer Expansion (`src/lib/analytics.ts`)
-- Added/expanded analytics functions for:
-  - sprint velocity trend
-  - capacity planning and forecasting
-  - cycle/lead distributions
-  - assignee workload
-  - grouped status-transition flow
-  - SLA status/trend/assignee breach metrics
-  - reopen-rate metrics
-- Added optional workflow group filtering support to filter-object analytics entry points.
+## 6) Styling and UX Updates
+- Updated status color mapping so `Done` is green in badges/charts.
+- Updated sprint ticket filter section to visually match the top filter bar design language.
 
-## 7) State Management (`src/store/app-store.ts`)
-- Added shared workflow-group slice:
-  - `workflowGroupFilter`
-  - synchronized with `filters.groupFilter`
-  - survives navigation and keeps chart/global controls in sync
-
-## 8) UX and Styling
-- Filter bar styling unified with dashboard surface.
-- Added new reusable chip/tag styles for workflow-group control rows and summary tags.
-- Added stronger visual hierarchy for high-signal controls and chart legends.
-
-## 9) Environment and Config
-- `.env.example` updated with additional app configuration guidance, including display timezone support.
-
-## 10) Validation
-- Project builds successfully with:
+## 7) Validation
+- Verified repeatedly with:
   - `npm run build`
-
+- Build passes successfully.

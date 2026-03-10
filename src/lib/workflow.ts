@@ -63,7 +63,7 @@ export const STATUS_COLORS: Record<IssueStatus, string> = {
     'In QA': '#10b981',
     'Ready for Acceptance': '#06b6d4',
     'Ready for Release': '#0ea5e9',
-    'Done': '#64748b',
+    'Done': '#22c55e',
     'Archived': '#475569',
     'Rejected': '#991b1b',
 };
@@ -75,6 +75,8 @@ export const ISSUE_TYPE_COLORS: Record<string, string> = {
     'Feature': '#8b5cf6',
     'Epic': '#f59e0b',
     'Subtask': '#64748b',
+    'Sub-task': '#64748b',
+    'Test Sub-task': '#14b8a6',
     'Technical Task': '#06b6d4',
     'Spike': '#a855f7',
     'Developer Request': '#ec4899',
