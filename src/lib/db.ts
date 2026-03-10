@@ -134,6 +134,16 @@ function initSchema(db: Database.Database) {
       configured INTEGER NOT NULL DEFAULT 0,
       updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
+
+    CREATE TABLE IF NOT EXISTS team_config (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      team_name TEXT DEFAULT 'Engineering Team',
+      active_engineers INTEGER DEFAULT 3,
+      hourly_rate INTEGER DEFAULT 100,
+      productive_hours_per_sprint INTEGER DEFAULT 50,
+      sprint_length_weeks INTEGER DEFAULT 2,
+      updated_at TEXT
+    );
   `);
 
     // Backfill epics table for existing databases created before epics persistence.
