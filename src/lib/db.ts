@@ -60,7 +60,7 @@ function initSchema(db: Database.Database) {
       squad TEXT,
       url TEXT,
       changelog TEXT DEFAULT '[]',
-      synced_at TEXT DEFAULT (datetime('now')),
+      synced_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       raw_json TEXT
     );
 

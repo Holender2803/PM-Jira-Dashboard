@@ -1,5 +1,9 @@
 # PM Jira Dashboard Documentation
 
+## Latest Branch Changelog
+For a full branch-level breakdown of all implemented changes, see:
+- `docs/IMPLEMENTATION_CHANGELOG.md`
+
 ## Project Purpose
 This project is a full-stack Jira analytics cockpit for Product Managers.  
 It helps answer operational PM questions around sprint execution, work mix, blockers, bugs, aging work, delivery outcomes, and AI-generated status reporting.
@@ -90,4 +94,3 @@ npm run build
 
 ## Current Status
 Project is in a production-style, usable state for PM analytics workflows, with active development on UX refinements and dashboard storytelling enhancements.
-

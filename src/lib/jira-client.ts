@@ -231,6 +231,7 @@ function parseIssue(raw: any, baseUrl: string): JiraIssue {
         created: fields.created,
         updated: fields.updated,
         resolved: fields.resolutiondate || null,
+        dueDate: fields.duedate || null,
         changelog,
         commentsCount: fields.comment?.total || 0,
         linkedIssues: (fields.issuelinks || []).map((l: { inwardIssue?: { key: string }; outwardIssue?: { key: string } }) =>
@@ -257,7 +258,7 @@ export async function fetchAllIssues(
         'assignee', 'reporter', 'labels', 'components', 'parent',
         'customfield_10011', 'customfield_10014', 'customfield_10016', 'customfield_10020',
         'customfield_10023', 'customfield_10028', 'customfield_10087',
-        'sprint', 'story_points', 'created', 'updated', 'resolutiondate',
+        'sprint', 'story_points', 'created', 'updated', 'resolutiondate', 'duedate',
         'comment', 'issuelinks', 'project', 'epic', 'worktype',
     ];
     const expand = ['changelog'];

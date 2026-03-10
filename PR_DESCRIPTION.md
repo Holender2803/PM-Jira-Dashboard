@@ -1,75 +1,65 @@
-# PM Jira Dashboard Enhancements
+# PM Jira Dashboard - Workflow Visibility and PM Ops Upgrade
 
 ## Summary
-This PR delivers a major PM analytics upgrade across Sprint, Workflow, and Bugs dashboards, including new forecasting, time-distribution, and quality-risk insights.
+This PR delivers a large PM analytics upgrade focused on workflow visibility, risk tracking, workload insights, and better storytelling outputs.
 
-## What Was Added
+## Major Additions
 
-### 1) Sprint Dashboard: Velocity Trending
-- Added velocity analytics and 3-sprint rolling average:
-  - `getVelocityTrend(...)` in `src/lib/analytics.ts`
-- Added new chart:
-  - `src/components/charts/VelocityChart.tsx`
-- Integrated on Sprint page below summary metrics:
-  - `src/app/(dashboard)/sprint/page.tsx`
-- Updated Sprint page data flow to respect global filters via filtered issue set.
+### Workflow Sankey (Grouped and Readable)
+- Added canonical workflow-group mapping layer:
+  - Backlog, Planning, In Progress, Review / QA, Awaiting, Blocked / Hold, Done
+- Added grouped transition analytics in `getStatusTransitionFlow(...)`:
+  - backward transition tracking
+  - bottleneck source detection (`avg dwell > 2x median`)
+  - unique-ticket counts per workflow group
+- Added improved Sankey chart:
+  - grouped node labels with ticket counts
+  - edge threshold slider (`Min transitions to show`)
+  - forward/backward color/opacity differentiation
+  - hover tooltip (`X → Y: N transitions`)
+  - top-left legend
+  - sparse-data placeholder
+- Mounted as primary Workflow section with controls.
 
-### 2) Workflow Dashboard: Cycle Time / Lead Time Distribution
-- Added distribution analytics with percentile support and raw points grouped by issue type:
-  - `getCycleLeadTimeDistribution(...)` in `src/lib/analytics.ts`
-- Added histogram + percentile component:
-  - `src/components/charts/CycleTimeChart.tsx`
-- Added UI controls:
-  - Toggle between Cycle Time and Lead Time
-  - Segmented issue-type filter (`All`, `Story`, `Bug`, `Task`, `Sub-task`)
-  - Expandable panel under status flow
-- Added in-context explainer for chart interpretation (definitions, histogram, percentiles):
-  - `src/app/(dashboard)/workflow/page.tsx`
-- Updated Info page guide to document Cycle/Lead chart usage:
-  - `src/app/(dashboard)/info/page.tsx`
+### Global Workflow Group Filter (Cross-Dashboard)
+- Added shared Zustand slice `workflowGroupFilter`.
+- Synced local Sankey controls and global filter bar.
+- Added global chip controls and presets:
+  - `All`
+  - `Active only`
+- Added summary tag in filter bar when group filter is active.
+- Applied group filtering across dashboards via in-memory filters and analytics filter params.
 
-### 3) Sprint Dashboard: Capacity Planning
-- Added capacity forecasting analytics:
-  - `getCapacityData(...)` in `src/lib/analytics.ts`
-- Returns core requested metrics:
-  - `committed`, `completed`, `completionRate`, `forecast3Sprint`, `teamCapacityDelta`
-- Forecast model:
-  - Rolling 3-sprint average completion rate × committed points
-- Added reusable capacity planner component:
-  - `src/components/CapacityPlanner.tsx`
-- Includes:
-  - Last 6 sprint capacity visualization
-  - Forward-looking forecast with confidence band
-  - PM callout for rolling completion behavior
-  - What-if input for target points and projected completion/carryover
-- Mounted in Sprint page as a collapsible panel below Velocity:
-  - `src/app/(dashboard)/sprint/page.tsx`
+### Sprint, Focus, Bugs, Tickets Upgrades
+- Sprint:
+  - Velocity trend (including rolling 3-sprint average)
+  - Capacity planner (forecast, confidence band, what-if)
+- Focus:
+  - Team Load view with per-assignee workload signals
+- Bugs:
+  - Reopen-rate KPI with prior-window trend and top reopened tickets
+- Tickets:
+  - SLA urgency panels, trend views, assignee breach insights
 
-### 4) Bugs Dashboard: Re-open Rate Tracking
-- Added reopen analytics:
-  - `getReopenRates(...)` in `src/lib/analytics.ts`
-- Reopen definition implemented from status history:
-  - transition from closed (`Done/Archived/Rejected`) to non-closed status
-- Returns:
-  - `totalBugs`, `reopenedCount`, `reopenRate`, `topReopenedTickets` (+ 30-day trend helpers)
-- Added new KPI card component:
-  - `src/components/ReopenRateCard.tsx`
-- Includes:
-  - Large reopen-rate KPI
-  - Trend arrow vs prior 30-day window
-  - Top 5 reopened tickets with Jira deep-links
-  - Methodology tooltip
-- Mounted with bug stat cards on Bugs page:
-  - `src/app/(dashboard)/bugs/page.tsx`
+### Data/Backend and Reliability
+- Jira query path updates and sync hardening.
+- DB sync timestamp normalization and timezone-safe display formatting.
+- Additional API/query filter support (`groupFilter`) and normalized issue shape handling.
 
-## Technical Notes
-- No new npm packages added.
-- Existing Recharts stack reused.
-- Global filters (including project/date) are respected by using filtered Zustand issue data in page-level integrations.
+### Documentation
+- Added full implementation changelog:
+  - `docs/IMPLEMENTATION_CHANGELOG.md`
+
+## Files of Interest
+- `src/lib/workflow-groups.ts`
+- `src/lib/analytics.ts`
+- `src/components/charts/SankeyChart.tsx`
+- `src/app/(dashboard)/workflow/page.tsx`
+- `src/components/filters/FilterBar.tsx`
+- `src/store/app-store.ts`
+- `src/lib/filters.ts`
+- `src/lib/issue-store.ts`
+- `src/app/api/jira/issues/route.ts`
 
 ## Validation
-- `npm run typecheck`
-- `npm run lint`
-- `npm run build`
-
-All commands pass successfully.
+- `npm run build` passes.

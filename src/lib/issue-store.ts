@@ -1,6 +1,12 @@
 import getDb from './db';
 import { JiraIssue, DashboardFilters, Sprint } from '@/types';
 import { CLOSED_STATUSES } from './workflow';
+import { isAtRiskIssue } from './filters';
+import { normalizeUtcTimestamp } from './time';
+import {
+    getResolvedStatusesForGroups,
+    isAllWorkflowGroupsSelected,
+} from './workflow-groups';
 
 // ─── Save issues to DB ─────────────────────────────────────────────────────────
 
@@ -20,7 +26,7 @@ export function upsertIssues(issues: JiraIssue[]): void {
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, datetime('now'), ?
+      ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?
     )
     ON CONFLICT(id) DO UPDATE SET
       key = excluded.key,
@@ -56,7 +62,7 @@ export function upsertIssues(issues: JiraIssue[]): void {
       squad = excluded.squad,
       url = excluded.url,
       changelog = excluded.changelog,
-      synced_at = datetime('now'),
+      synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
       raw_json = excluded.raw_json
   `);
 
@@ -90,6 +96,15 @@ export function queryIssues(filters: DashboardFilters = {}): JiraIssue[] {
     if (filters.status?.length) {
         conditions.push(`status IN (${filters.status.map(() => '?').join(',')})`);
         params.push(...filters.status);
+    }
+    if (filters.groupFilter?.length && !isAllWorkflowGroupsSelected(filters.groupFilter)) {
+        const groupedStatuses = getResolvedStatusesForGroups(filters.groupFilter).map((status) =>
+            status.toLowerCase()
+        );
+        if (groupedStatuses.length > 0) {
+            conditions.push(`LOWER(status) IN (${groupedStatuses.map(() => '?').join(',')})`);
+            params.push(...groupedStatuses);
+        }
     }
     if (filters.issueType?.length) {
         conditions.push(`issue_type IN (${filters.issueType.map(() => '?').join(',')})`);
@@ -170,7 +185,19 @@ export function queryIssues(filters: DashboardFilters = {}): JiraIssue[] {
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     const rows = db.prepare(`SELECT raw_json FROM issues ${where} ORDER BY updated DESC`).all(...params) as { raw_json: string }[];
-    return rows.map(r => JSON.parse(r.raw_json) as JiraIssue);
+    const parsed = rows.map((row) => {
+        const issue = JSON.parse(row.raw_json) as JiraIssue & { dueDate?: string | null };
+        return {
+            ...issue,
+            dueDate: issue.dueDate ?? null,
+        };
+    });
+
+    if (filters.atRiskOnly) {
+        return parsed.filter((issue) => isAtRiskIssue(issue));
+    }
+
+    return parsed;
 }
 
 // ─── Sprint queries ────────────────────────────────────────────────────────────
@@ -209,13 +236,18 @@ export function getTotalIssues(): number {
 export function getLastSyncedAt(): string | null {
     const db = getDb();
     const row = db.prepare('SELECT MAX(synced_at) as t FROM issues').get() as { t: string | null };
-    return row.t;
+    return normalizeUtcTimestamp(row.t);
 }
 
 export function getIssueByKey(key: string): JiraIssue | null {
     const db = getDb();
     const row = db.prepare('SELECT raw_json FROM issues WHERE key = ?').get(key) as { raw_json: string } | undefined;
-    return row ? JSON.parse(row.raw_json) : null;
+    if (!row) return null;
+    const issue = JSON.parse(row.raw_json) as JiraIssue & { dueDate?: string | null };
+    return {
+        ...issue,
+        dueDate: issue.dueDate ?? null,
+    };
 }
 
 export { CLOSED_STATUSES };

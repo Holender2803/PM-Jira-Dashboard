@@ -2,10 +2,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { endOfWeek, format, parseISO, startOfWeek, differenceInCalendarDays } from 'date-fns';
 import { useAppStore } from '@/store/app-store';
-import { DashboardFilters, IssueStatus, IssueType, Priority } from '@/types';
+import {
+    DashboardFilters,
+    IssueStatus,
+    IssueType,
+    Priority,
+    WorkflowGroup,
+} from '@/types';
 import { ALL_STATUSES } from '@/lib/workflow';
 import { X, Filter, ChevronDown, Search, ExternalLink } from 'lucide-react';
 import { formatEpicLabelFromParts, isEpicIssue } from '@/lib/issue-format';
+import {
+    isAllWorkflowGroupsSelected,
+    WORKFLOW_ACTIVE_ONLY_GROUPS,
+    WORKFLOW_GROUP_ORDER,
+} from '@/lib/workflow-groups';
 
 const TYPES: IssueType[] = ['Bug', 'Story', 'Task', 'Feature', 'Technical Task', 'Spike', 'Developer Request', 'Support', 'Chore'];
 const PRIORITIES: Priority[] = ['Highest', 'High', 'Medium', 'Low', 'Lowest'];
@@ -193,7 +204,15 @@ function FilterDropdown({
 }
 
 export default function FilterBar({ showSprintFilter = true }: FilterBarProps) {
-    const { filters, setFilters, resetFilters, issues, selectedKeys } = useAppStore();
+    const {
+        filters,
+        setFilters,
+        resetFilters,
+        issues,
+        selectedKeys,
+        workflowGroupFilter,
+        setWorkflowGroupFilter,
+    } = useAppStore();
 
     const assignees = Array.from(
         new Map(
@@ -258,10 +277,23 @@ export default function FilterBar({ showSprintFilter = true }: FilterBarProps) {
     const labels = [...new Set(issues.flatMap((issue) => issue.labels))]
         .sort((a, b) => a.localeCompare(b));
 
-    const hasFilters = Object.keys(filters).some((key) => {
-        const value = filters[key as keyof DashboardFilters];
+    const hasFilters = Object.entries(filters).some(([key, rawValue]) => {
+        if (key === 'groupFilter') {
+            return !isAllWorkflowGroupsSelected(rawValue as string[] | undefined);
+        }
+        const value = rawValue as DashboardFilters[keyof DashboardFilters];
         return value !== undefined && value !== false && (Array.isArray(value) ? value.length > 0 : true);
     });
+    const allGroupsSelected = isAllWorkflowGroupsSelected(workflowGroupFilter);
+
+    const toggleWorkflowGroup = (group: WorkflowGroup) => {
+        if (workflowGroupFilter.includes(group)) {
+            if (workflowGroupFilter.length === 1) return;
+            setWorkflowGroupFilter(workflowGroupFilter.filter((item) => item !== group));
+            return;
+        }
+        setWorkflowGroupFilter([...workflowGroupFilter, group]);
+    };
 
     const applyCurrentWeek = () => {
         const start = startOfWeek(new Date(), { weekStartsOn: 1 });
@@ -509,6 +541,12 @@ export default function FilterBar({ showSprintFilter = true }: FilterBarProps) {
                         Unresolved
                     </button>
                     <button
+                        className={`filter-chip ${filters.atRiskOnly ? 'is-active is-warning' : ''}`}
+                        onClick={() => setFilters({ atRiskOnly: !filters.atRiskOnly })}
+                    >
+                        At Risk
+                    </button>
+                    <button
                         className={`filter-chip ${filters.selectedOnly ? 'is-active is-accent' : ''}`}
                         onClick={() => setFilters({
                             selectedOnly: !filters.selectedOnly,
@@ -532,12 +570,57 @@ export default function FilterBar({ showSprintFilter = true }: FilterBarProps) {
                     </button>
                 </div>
 
+                <div className="workflow-group-chip-row">
+                    <span className="workflow-group-chip-label">Groups</span>
+                    {WORKFLOW_GROUP_ORDER.map((group) => {
+                        const active = workflowGroupFilter.includes(group);
+                        return (
+                            <button
+                                key={group}
+                                className={`workflow-group-chip ${active ? 'is-active' : ''}`}
+                                onClick={() => toggleWorkflowGroup(group)}
+                                title={active ? `Hide ${group}` : `Show ${group}`}
+                            >
+                                {group}
+                            </button>
+                        );
+                    })}
+                    <div className="workflow-group-chip-shortcuts">
+                        <button
+                            className="workflow-group-shortcut"
+                            onClick={() => setWorkflowGroupFilter([...WORKFLOW_GROUP_ORDER])}
+                        >
+                            All
+                        </button>
+                        <button
+                            className="workflow-group-shortcut"
+                            onClick={() => setWorkflowGroupFilter([...WORKFLOW_ACTIVE_ONLY_GROUPS])}
+                        >
+                            Active only
+                        </button>
+                    </div>
+                </div>
+
                 {hasFilters && (
                     <button className="filter-clear-btn" onClick={resetFilters}>
                         <X size={12} /> Clear
                     </button>
                 )}
             </div>
+
+            {!allGroupsSelected && (
+                <div className="filter-summary-row">
+                    <span className="filter-summary-label">Active Filters</span>
+                    <button
+                        className="filter-summary-tag"
+                        onClick={() => setWorkflowGroupFilter([...WORKFLOW_GROUP_ORDER])}
+                        title="Clear group filter"
+                    >
+                        Groups: {workflowGroupFilter.join(', ')}
+                        <X size={11} />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

@@ -30,6 +30,8 @@ export async function GET(request: Request) {
         if (bugsOnly === 'true') filters.bugsOnly = true;
         const unresolvedOnly = searchParams.get('unresolvedOnly');
         if (unresolvedOnly === 'true') filters.unresolvedOnly = true;
+        const atRiskOnly = searchParams.get('atRiskOnly');
+        if (atRiskOnly === 'true') filters.atRiskOnly = true;
         const squad = searchParams.get('squad');
         if (squad) filters.squad = squad.split(',');
         const epicKey = searchParams.get('epicKey');
@@ -42,6 +44,8 @@ export async function GET(request: Request) {
         if (project) filters.project = project.split(',');
         const label = searchParams.get('label');
         if (label) filters.label = label.split(',');
+        const groupFilter = searchParams.get('groupFilter');
+        if (groupFilter) filters.groupFilter = groupFilter.split(',') as DashboardFilters['groupFilter'];
         const dateFrom = searchParams.get('dateFrom');
         if (dateFrom) filters.dateFrom = dateFrom;
         const dateTo = searchParams.get('dateTo');

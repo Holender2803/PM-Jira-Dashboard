@@ -6,6 +6,15 @@ export type IssueStatus =
     | 'Ready for QA' | 'In QA' | 'Ready for Acceptance'
     | 'Ready for Release' | 'Done' | 'Archived' | 'Rejected';
 
+export type WorkflowGroup =
+    | 'Backlog'
+    | 'Planning'
+    | 'In Progress'
+    | 'Review / QA'
+    | 'Awaiting'
+    | 'Blocked / Hold'
+    | 'Done';
+
 export type WorkflowStage =
     | 'intake' | 'discovery' | 'delivery' | 'review' | 'qa' | 'release' | 'closed';
 
@@ -62,6 +71,7 @@ export interface JiraIssue {
     created: string;
     updated: string;
     resolved: string | null;
+    dueDate: string | null;
     changelog: ChangelogEntry[];
     commentsCount: number;
     linkedIssues: string[];
@@ -97,8 +107,10 @@ export interface DashboardFilters {
     blockedOnly?: boolean;
     bugsOnly?: boolean;
     unresolvedOnly?: boolean;
+    atRiskOnly?: boolean;
     selectedOnly?: boolean;
     selectedKeys?: string[];
+    groupFilter?: WorkflowGroup[];
 }
 
 // ─── Metric Types ─────────────────────────────────────────────────────────────

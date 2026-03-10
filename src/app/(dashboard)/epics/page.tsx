@@ -1,6 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
-import { useFilteredIssues } from '@/store/app-store';
+import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import { ACTIVE_STATUSES, CLOSED_STATUSES } from '@/lib/workflow';
 import FilterBar from '@/components/filters/FilterBar';
 import IssueTable from '@/components/tables/IssueTable';
@@ -24,6 +24,7 @@ type EpicRow = {
 
 export default function EpicsPage() {
     const filtered = useFilteredIssues();
+    const allIssues = useAppStore((state) => state.issues);
     const [activeEpicKey, setActiveEpicKey] = useState<string | null>(null);
 
     const {
@@ -32,10 +33,13 @@ export default function EpicsPage() {
         blockedChildrenTotal,
     } = useMemo(() => {
         const summaryByKey = new Map<string, string>();
-        for (const issue of filtered) {
+        for (const issue of allIssues) {
             if (isEpicIssue(issue)) summaryByKey.set(issue.key, issue.summary);
             if (issue.epicKey && issue.epicSummary && issue.epicSummary !== issue.epicKey) {
                 summaryByKey.set(issue.epicKey, issue.epicSummary);
+            }
+            if (issue.key && issue.summary) {
+                summaryByKey.set(issue.key, issue.summary);
             }
         }
 
@@ -103,7 +107,7 @@ export default function EpicsPage() {
             ticketsWithoutEpic: filtered.filter((issue) => !isEpicIssue(issue) && !issue.epicKey),
             blockedChildrenTotal: rows.reduce((sum, row) => sum + row.blocked, 0),
         };
-    }, [filtered]);
+    }, [allIssues, filtered]);
 
     const selectedEpicKey = activeEpicKey || epicRows[0]?.key || null;
     const selectedEpic = epicRows.find((row) => row.key === selectedEpicKey) || null;

@@ -1,16 +1,34 @@
 'use client';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import IssueTable from '@/components/tables/IssueTable';
+import IssueDrawer from '@/components/tables/IssueDrawer';
+import SLAHeatRow from '@/components/SLAHeatRow';
 import { extractDescriptionText, formatEpicLabel } from '@/lib/issue-format';
+import { getSLAAssigneeBreach, getSLAStatus, getSLATrend } from '@/lib/analytics';
+import { JiraIssue } from '@/types';
+import { ChevronDown, ChevronUp } from 'lucide-react';
+import {
+    Bar,
+    CartesianGrid,
+    ComposedChart,
+    Line,
+    Legend,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
+} from 'recharts';
 
 function toCsvValue(value: unknown): string {
     const text = value === null || value === undefined ? '' : String(value);
     const escaped = text.replace(/"/g, '""');
     return `"${escaped}"`;
 }
+
+type SLASortKey = 'key' | 'summary' | 'assignee' | 'status' | 'dueDate' | 'urgency';
 
 export default function TicketsPage() {
     const router = useRouter();
@@ -21,6 +39,7 @@ export default function TicketsPage() {
         setSavedViews,
         selectedKeys,
         clearSelection,
+        workflowGroupFilter,
     } = useAppStore();
     const filtered = useFilteredIssues();
 
@@ -28,6 +47,9 @@ export default function TicketsPage() {
     const [viewName, setViewName] = useState('');
     const [viewDescription, setViewDescription] = useState('');
     const [savingView, setSavingView] = useState(false);
+    const [slaSortKey, setSlaSortKey] = useState<SLASortKey>('dueDate');
+    const [slaSortAsc, setSlaSortAsc] = useState(true);
+    const [slaDrawerIssue, setSlaDrawerIssue] = useState<JiraIssue | null>(null);
 
     const visibleIssues = useMemo(() => {
         const term = search.trim().toLowerCase();
@@ -46,6 +68,58 @@ export default function TicketsPage() {
         });
     }, [filtered, search]);
 
+    const slaStatus = useMemo(
+        () => getSLAStatus(filtered, { groupFilter: workflowGroupFilter }),
+        [filtered, workflowGroupFilter]
+    );
+    const slaTrend = useMemo(
+        () => getSLATrend(filtered, { days: 28, groupFilter: workflowGroupFilter }),
+        [filtered, workflowGroupFilter]
+    );
+    const slaByAssignee = useMemo(
+        () => getSLAAssigneeBreach(filtered, { groupFilter: workflowGroupFilter }).slice(0, 10),
+        [filtered, workflowGroupFilter]
+    );
+
+    const atRiskIssues = useMemo(() => {
+        const sorted = [...slaStatus.atRisk];
+        sorted.sort((left, right) => {
+            let compare = 0;
+
+            if (slaSortKey === 'key') {
+                compare = left.issue.key.localeCompare(right.issue.key);
+            } else if (slaSortKey === 'summary') {
+                compare = left.issue.summary.localeCompare(right.issue.summary);
+            } else if (slaSortKey === 'assignee') {
+                compare = (left.issue.assignee?.displayName || 'Unassigned')
+                    .localeCompare(right.issue.assignee?.displayName || 'Unassigned');
+            } else if (slaSortKey === 'status') {
+                compare = left.issue.status.localeCompare(right.issue.status);
+            } else if (slaSortKey === 'urgency') {
+                compare = left.urgencyRank - right.urgencyRank;
+            } else {
+                const leftTime = Date.parse(left.dueDate);
+                const rightTime = Date.parse(right.dueDate);
+                compare = leftTime - rightTime;
+            }
+
+            if (compare === 0) {
+                compare = right.issue.updated.localeCompare(left.issue.updated);
+            }
+            return slaSortAsc ? compare : -compare;
+        });
+        return sorted;
+    }, [slaSortAsc, slaSortKey, slaStatus.atRisk]);
+
+    const handleSlaSort = (key: SLASortKey) => {
+        if (slaSortKey === key) {
+            setSlaSortAsc((current) => !current);
+            return;
+        }
+        setSlaSortKey(key);
+        setSlaSortAsc(true);
+    };
+
     const exportCsv = () => {
         const headers = [
             'Key',
@@ -56,6 +130,7 @@ export default function TicketsPage() {
             'Assignee',
             'Sprint',
             'Story Points',
+            'Due Date',
             'Created',
             'Updated',
             'Resolved',
@@ -73,6 +148,7 @@ export default function TicketsPage() {
             issue.assignee?.displayName || '',
             issue.sprint?.name || '',
             issue.storyPoints ?? '',
+            issue.dueDate || '',
             issue.created,
             issue.updated,
             issue.resolved || '',
@@ -129,6 +205,16 @@ export default function TicketsPage() {
         await reloadViews();
     };
 
+    const renderSlaSortIcon = (key: SLASortKey) => {
+        if (slaSortKey !== key) return null;
+        return slaSortAsc ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
+    };
+
+    const slaHeaderStyle: CSSProperties = {
+        cursor: 'pointer',
+        userSelect: 'none',
+    };
+
     return (
         <div>
             <div className="page-header" style={{ paddingBottom: 20 }}>
@@ -176,6 +262,157 @@ export default function TicketsPage() {
                     <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                         {visibleIssues.length} matching tickets
                     </span>
+                </div>
+
+                <div className="dashboard-grid grid-2">
+                    <div className="chart-container">
+                        <div className="chart-title">At-Risk SLA Trend (Last 4 Weeks)</div>
+                        {slaTrend.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={260}>
+                                <ComposedChart data={slaTrend}>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} />
+                                    <YAxis tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} />
+                                    <Tooltip
+                                        contentStyle={{
+                                            background: 'var(--bg-elevated)',
+                                            border: '1px solid var(--border)',
+                                            borderRadius: 8,
+                                            color: 'var(--text-primary)',
+                                        }}
+                                    />
+                                    <Legend />
+                                    <Bar dataKey="overdue" stackId="risk" fill="#ef4444" name="Overdue" radius={[4, 4, 0, 0]} />
+                                    <Bar dataKey="dueToday" stackId="risk" fill="#f97316" name="Due Today" radius={[4, 4, 0, 0]} />
+                                    <Line type="monotone" dataKey="atRisk" stroke="#f59e0b" strokeWidth={2} dot={false} name="At Risk Total" />
+                                    <Line type="monotone" dataKey="totalTracked" stroke="#94a3b8" strokeWidth={2} strokeDasharray="4 4" dot={false} name="Tracked with Due Date" />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>No due-date trend data available.</div>
+                        )}
+                    </div>
+
+                    <div className="chart-container">
+                        <div className="chart-title">Assignee SLA Breach Rate</div>
+                        {slaByAssignee.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={260}>
+                                <ComposedChart
+                                    data={slaByAssignee.map((row) => ({
+                                        ...row,
+                                        assigneeLabel: row.assignee.length > 14
+                                            ? `${row.assignee.slice(0, 14)}…`
+                                            : row.assignee,
+                                    }))}
+                                    layout="vertical"
+                                    margin={{ left: 14 }}
+                                >
+                                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                                    <XAxis type="number" tick={{ fontSize: 11, fill: 'var(--text-secondary)' }} />
+                                    <YAxis
+                                        type="category"
+                                        dataKey="assigneeLabel"
+                                        width={120}
+                                        tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                                    />
+                                    <Tooltip
+                                        contentStyle={{
+                                            background: 'var(--bg-elevated)',
+                                            border: '1px solid var(--border)',
+                                            borderRadius: 8,
+                                            color: 'var(--text-primary)',
+                                        }}
+                                    />
+                                    <Legend />
+                                    <Bar dataKey="breachRate" fill="#f59e0b" name="Breach Rate" radius={[0, 4, 4, 0]} />
+                                    <Bar dataKey="atRisk" fill="#ef4444" name="At Risk Count" radius={[0, 4, 4, 0]} />
+                                </ComposedChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>No assignee SLA data available.</div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div
+                        style={{
+                            padding: '16px 18px 12px',
+                            borderBottom: '1px solid var(--border)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: 16,
+                            flexWrap: 'wrap',
+                        }}
+                    >
+                        <div>
+                            <div className="chart-title" style={{ marginBottom: 4 }}>
+                                SLA / Due-Date Risk
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                                At-risk tickets are <strong>Overdue</strong> or <strong>Due Today</strong>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {(Object.entries(slaStatus.byUrgency) as [keyof typeof slaStatus.byUrgency, number][])
+                                .map(([urgency, count]) => (
+                                    <span
+                                        key={urgency}
+                                        className="badge"
+                                        style={{
+                                            background: 'var(--bg-elevated)',
+                                            color: 'var(--text-secondary)',
+                                            border: '1px solid var(--border)',
+                                        }}
+                                    >
+                                        {urgency}: {count}
+                                    </span>
+                                ))}
+                        </div>
+                    </div>
+
+                    {atRiskIssues.length > 0 ? (
+                        <div className="table-wrapper" style={{ border: 0, borderRadius: 0 }}>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th onClick={() => handleSlaSort('key')} style={slaHeaderStyle}>
+                                            Key {renderSlaSortIcon('key')}
+                                        </th>
+                                        <th onClick={() => handleSlaSort('summary')} style={slaHeaderStyle}>
+                                            Summary {renderSlaSortIcon('summary')}
+                                        </th>
+                                        <th onClick={() => handleSlaSort('assignee')} style={slaHeaderStyle}>
+                                            Assignee {renderSlaSortIcon('assignee')}
+                                        </th>
+                                        <th onClick={() => handleSlaSort('status')} style={slaHeaderStyle}>
+                                            Status {renderSlaSortIcon('status')}
+                                        </th>
+                                        <th onClick={() => handleSlaSort('dueDate')} style={slaHeaderStyle}>
+                                            Due Date {renderSlaSortIcon('dueDate')}
+                                        </th>
+                                        <th onClick={() => handleSlaSort('urgency')} style={slaHeaderStyle}>
+                                            Urgency {renderSlaSortIcon('urgency')}
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {atRiskIssues.map((row) => (
+                                        <SLAHeatRow
+                                            key={row.issue.key}
+                                            row={row}
+                                            onOpenIssue={setSlaDrawerIssue}
+                                        />
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    ) : (
+                        <div style={{ padding: '18px 20px', fontSize: 12, color: 'var(--text-muted)' }}>
+                            No at-risk tickets in the current filter scope.
+                        </div>
+                    )}
                 </div>
 
                 <div className="dashboard-grid grid-2">
@@ -233,6 +470,10 @@ export default function TicketsPage() {
 
                 <IssueTable issues={visibleIssues} />
             </div>
+
+            {slaDrawerIssue && (
+                <IssueDrawer issue={slaDrawerIssue} onClose={() => setSlaDrawerIssue(null)} />
+            )}
         </div>
     );
 }

@@ -7,6 +7,7 @@ import {
     RefreshCw, ChevronLeft, ChevronRight, Database, CircleHelp, Layers
 } from 'lucide-react';
 import { useState } from 'react';
+import { formatTimeForDisplay } from '@/lib/time';
 
 const NAV_ITEMS = [
     { href: '/', label: 'Overview', icon: LayoutDashboard },
@@ -120,7 +121,7 @@ export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
                     <>
                         <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 8 }}>
                             {totalIssues > 0 && <div>{totalIssues} issues loaded</div>}
-                            {lastSynced && <div>Synced {new Date(lastSynced).toLocaleTimeString()}</div>}
+                            {lastSynced && <div>Synced {formatTimeForDisplay(lastSynced, { includeZone: true })}</div>}
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
                             <button

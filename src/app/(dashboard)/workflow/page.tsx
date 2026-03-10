@@ -1,6 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
-import { useFilteredIssues } from '@/store/app-store';
+import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import { StatCard } from '@/components/ui/Badges';
 import IssueTable from '@/components/tables/IssueTable';
@@ -8,9 +8,12 @@ import {
     calculateWorkflowMetrics,
     getCycleLeadTimeDistribution,
     CycleLeadMetric,
+    getStatusTransitionFlow,
+    StatusTransitionView,
 } from '@/lib/analytics';
 import { StatusChart, WorkflowFunnelChart } from '@/components/charts/DashboardCharts';
 import CycleTimeChart from '@/components/charts/CycleTimeChart';
+import SankeyChart from '@/components/charts/SankeyChart';
 import { ChevronDown } from 'lucide-react';
 import {
     ResponsiveContainer,
@@ -24,22 +27,49 @@ import {
     BarChart,
     Bar,
 } from 'recharts';
+import {
+    WORKFLOW_ACTIVE_ONLY_GROUPS,
+    WORKFLOW_GROUP_ORDER,
+} from '@/lib/workflow-groups';
+import { WorkflowGroup } from '@/types';
 
 export default function WorkflowPage() {
     const filtered = useFilteredIssues();
+    const workflowGroupFilter = useAppStore((state) => state.workflowGroupFilter);
+    const setWorkflowGroupFilter = useAppStore((state) => state.setWorkflowGroupFilter);
     const metrics = useMemo(() => calculateWorkflowMetrics(filtered), [filtered]);
     const [timeMode, setTimeMode] = useState<CycleLeadMetric>('cycle');
     const [selectedIssueType, setSelectedIssueType] = useState<'all' | 'Story' | 'Bug' | 'Task' | 'Subtask'>('all');
     const [showTimeDistribution, setShowTimeDistribution] = useState(true);
+    const [transitionView, setTransitionView] = useState<StatusTransitionView>('all');
+    const [minTransitions, setMinTransitions] = useState(3);
 
     const cycleLeadDistribution = useMemo(
         () =>
             getCycleLeadTimeDistribution(filtered, {
                 metric: timeMode,
                 issueTypes: selectedIssueType === 'all' ? undefined : [selectedIssueType],
+                groupFilter: workflowGroupFilter,
             }),
-        [filtered, selectedIssueType, timeMode]
+        [filtered, selectedIssueType, timeMode, workflowGroupFilter]
     );
+    const statusTransitionFlow = useMemo(
+        () =>
+            getStatusTransitionFlow(filtered, {
+                view: transitionView,
+                groupFilter: workflowGroupFilter,
+            }),
+        [filtered, transitionView, workflowGroupFilter]
+    );
+
+    const toggleWorkflowGroup = (group: WorkflowGroup) => {
+        if (workflowGroupFilter.includes(group)) {
+            if (workflowGroupFilter.length === 1) return;
+            setWorkflowGroupFilter(workflowGroupFilter.filter((item) => item !== group));
+            return;
+        }
+        setWorkflowGroupFilter([...workflowGroupFilter, group]);
+    };
 
     const avgTimeData = Object.entries(metrics.avgTimeByStatus)
         .filter(([, avg]) => avg > 0)
@@ -73,6 +103,115 @@ export default function WorkflowPage() {
                     <StatCard label="Blocked" value={metrics.blockedAging.length} color="#ef4444" />
                     <StatCard label="Reopens" value={metrics.reopenTotal} color="#f59e0b" />
                     <StatCard label="Bounce Back Tickets" value={metrics.bounceBackIssues.length} color="#ec4899" />
+                </div>
+
+                <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <div
+                        style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: 10,
+                        }}
+                    >
+                        <div>
+                            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
+                                🔀 Status Flow Sankey
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                                Transition paths across workflow statuses, including backward rework loops
+                            </div>
+                        </div>
+                        <div className="tab-bar">
+                            <button
+                                type="button"
+                                className={`tab ${transitionView === 'all' ? 'active' : ''}`}
+                                onClick={() => setTransitionView('all')}
+                            >
+                                All transitions
+                            </button>
+                            <button
+                                type="button"
+                                className={`tab ${transitionView === 'bottleneck' ? 'active' : ''}`}
+                                onClick={() => setTransitionView('bottleneck')}
+                            >
+                                Bottleneck view
+                            </button>
+                        </div>
+                    </div>
+
+                    {transitionView === 'bottleneck' && (
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                            Bottlenecks are statuses with average time greater than 2× median
+                            {statusTransitionFlow.bottleneckStatuses.length > 0
+                                ? ` · ${statusTransitionFlow.bottleneckStatuses.join(', ')}`
+                                : ' · none in current scope'}
+                        </div>
+                    )}
+
+                    <div
+                        style={{
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            gap: 8,
+                            border: '1px solid var(--border)',
+                            borderRadius: 10,
+                            background: 'var(--bg-elevated)',
+                            padding: '10px 12px',
+                        }}
+                    >
+                        {WORKFLOW_GROUP_ORDER.map((group) => {
+                            const active = workflowGroupFilter.includes(group);
+                            return (
+                                <button
+                                    key={group}
+                                    type="button"
+                                    className={`filter-chip ${active ? 'is-active is-accent' : ''}`}
+                                    onClick={() => toggleWorkflowGroup(group)}
+                                    title={active ? `Hide ${group}` : `Show ${group}`}
+                                >
+                                    {group}
+                                </button>
+                            );
+                        })}
+                        <button
+                            type="button"
+                            className="filter-chip is-neutral"
+                            onClick={() => setWorkflowGroupFilter([...WORKFLOW_GROUP_ORDER])}
+                        >
+                            All
+                        </button>
+                        <button
+                            type="button"
+                            className="filter-chip is-neutral"
+                            onClick={() => setWorkflowGroupFilter([...WORKFLOW_ACTIVE_ONLY_GROUPS])}
+                        >
+                            Active only
+                        </button>
+
+                        <div style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
+                                Min transitions to show: <strong>{minTransitions}</strong>
+                            </label>
+                            <input
+                                type="range"
+                                min={1}
+                                max={20}
+                                value={minTransitions}
+                                onChange={(event) => setMinTransitions(Number(event.target.value))}
+                                style={{ width: 180 }}
+                            />
+                        </div>
+                    </div>
+
+                    <SankeyChart
+                        flow={statusTransitionFlow}
+                        minTransitions={minTransitions}
+                        selectedGroups={workflowGroupFilter}
+                        bottleneckMode={transitionView === 'bottleneck'}
+                    />
                 </div>
 
                 <div className="dashboard-grid grid-2">

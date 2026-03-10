@@ -1,6 +1,6 @@
 import { JiraIssue, Sprint, IssueStatus, IssueType, Priority } from '@/types';
 import { computeIssueMetrics, WORKFLOW_STAGES } from './workflow';
-import { subDays, formatISO } from 'date-fns';
+import { addDays, formatISO, subDays } from 'date-fns';
 
 const now = new Date();
 const d = (days: number) => formatISO(subDays(now, days));
@@ -33,6 +33,13 @@ const ASSIGNEES = [
     { accountId: 'u5', displayName: 'Lena Hoffmann', emailAddress: 'lena@company.com', avatarUrl: '' },
     { accountId: 'u6', displayName: 'James Park', emailAddress: 'james@company.com', avatarUrl: '' },
 ];
+
+function deriveDueDate(key: string, status: IssueStatus): string | null {
+    if (['Done', 'Archived', 'Rejected'].includes(status)) return null;
+    const hash = [...key].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+    const offsetDays = (hash % 32) - 8; // deterministic window: overdue and future dates
+    return formatISO(addDays(now, offsetDays), { representation: 'date' });
+}
 
 function makeIssue(
     key: string,
@@ -106,6 +113,7 @@ function makeIssue(
         created,
         updated,
         resolved: resolvedDate,
+        dueDate: deriveDueDate(key, status),
         changelog,
         commentsCount: Math.floor(Math.random() * 8),
         linkedIssues: [],

@@ -1,9 +1,22 @@
 'use client';
 import { create } from 'zustand';
 import { useMemo } from 'react';
-import { JiraIssue, DashboardFilters, Sprint, AIReportResponse, SavedView } from '@/types';
+import {
+    JiraIssue,
+    DashboardFilters,
+    Sprint,
+    AIReportResponse,
+    SavedView,
+    WorkflowGroup,
+} from '@/types';
 import { filterIssues } from '@/lib/filters';
 import { enrichIssuesWithEpicSummaries } from '@/lib/issue-format';
+import {
+    normalizeWorkflowGroupFilter,
+    WORKFLOW_GROUP_ORDER,
+} from '@/lib/workflow-groups';
+
+const DEFAULT_WORKFLOW_GROUP_FILTER: WorkflowGroup[] = [...WORKFLOW_GROUP_ORDER];
 
 interface AppState {
     // Issues
@@ -15,6 +28,7 @@ interface AppState {
 
     // Filters
     filters: DashboardFilters;
+    workflowGroupFilter: WorkflowGroup[];
     activeSprints: Sprint[];
     selectedKeys: Set<string>;
 
@@ -32,6 +46,7 @@ interface AppState {
     setIssues: (issues: JiraIssue[]) => void;
     setLoading: (v: boolean) => void;
     setFilters: (f: Partial<DashboardFilters>) => void;
+    setWorkflowGroupFilter: (groups: WorkflowGroup[]) => void;
     resetFilters: () => void;
     setSelectedKeys: (keys: Set<string>) => void;
     toggleSelected: (key: string) => void;
@@ -53,7 +68,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     lastSynced: null,
     totalIssues: 0,
     demoMode: false,
-    filters: {},
+    filters: { groupFilter: DEFAULT_WORKFLOW_GROUP_FILTER },
+    workflowGroupFilter: DEFAULT_WORKFLOW_GROUP_FILTER,
     activeSprints: [],
     selectedKeys: new Set(),
     sidebarOpen: true,
@@ -63,8 +79,37 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     setIssues: (issues) => set({ issues: enrichIssuesWithEpicSummaries(issues) }),
     setLoading: (isLoading) => set({ isLoading }),
-    setFilters: (f) => set(s => ({ filters: { ...s.filters, ...f } })),
-    resetFilters: () => set({ filters: {} }),
+    setFilters: (f) =>
+        set((state) => {
+            const nextFilters = { ...state.filters, ...f };
+            let nextWorkflowGroups = state.workflowGroupFilter;
+
+            if (Object.prototype.hasOwnProperty.call(f, 'groupFilter')) {
+                nextWorkflowGroups = normalizeWorkflowGroupFilter(f.groupFilter);
+                nextFilters.groupFilter = nextWorkflowGroups;
+            }
+
+            return {
+                filters: nextFilters,
+                workflowGroupFilter: nextWorkflowGroups,
+            };
+        }),
+    setWorkflowGroupFilter: (groups) =>
+        set((state) => {
+            const normalized = normalizeWorkflowGroupFilter(groups);
+            return {
+                workflowGroupFilter: normalized,
+                filters: {
+                    ...state.filters,
+                    groupFilter: normalized,
+                },
+            };
+        }),
+    resetFilters: () =>
+        set({
+            filters: { groupFilter: DEFAULT_WORKFLOW_GROUP_FILTER },
+            workflowGroupFilter: DEFAULT_WORKFLOW_GROUP_FILTER,
+        }),
     setSelectedKeys: (selectedKeys) => set({ selectedKeys }),
     toggleSelected: (key) => {
         const keys = new Set(get().selectedKeys);
@@ -77,7 +122,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     setTheme: (theme) => set({ theme }),
     addAIReport: (r) => set(s => ({ aiReports: [r, ...s.aiReports] })),
     setSavedViews: (savedViews) => set({ savedViews }),
-    applyView: (view) => set({ filters: view.filters }),
+    applyView: (view) => {
+        const normalized = normalizeWorkflowGroupFilter(view.filters.groupFilter);
+        set({
+            filters: {
+                ...view.filters,
+                groupFilter: normalized,
+            },
+            workflowGroupFilter: normalized,
+        });
+    },
     setActiveSprints: (activeSprints) => set({ activeSprints }),
     setLastSynced: (lastSynced) => set({ lastSynced }),
     setTotalIssues: (totalIssues) => set({ totalIssues }),

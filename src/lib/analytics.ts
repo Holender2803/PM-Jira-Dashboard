@@ -11,7 +11,14 @@ import {
     subDays,
     subWeeks,
 } from 'date-fns';
-import { IssueStatus, JiraIssue, Sprint, SprintMixChange, WorkflowStage } from '@/types';
+import {
+    IssueStatus,
+    JiraIssue,
+    Sprint,
+    SprintMixChange,
+    WorkflowGroup,
+    WorkflowStage,
+} from '@/types';
 import {
     ACTIVE_STATUSES,
     ALL_STATUSES,
@@ -20,7 +27,13 @@ import {
     STAGE_LABELS,
     WORKFLOW_STAGE_STATUSES,
 } from './workflow';
-import { formatEpicLabel } from './issue-format';
+import { formatEpicLabel, isEpicIssue } from './issue-format';
+import { applyGroupFilter, getDaysUntilDue } from './filters';
+import {
+    getStageIndexByGroup,
+    resolveWorkflowGroup,
+    WORKFLOW_GROUP_ORDER,
+} from './workflow-groups';
 
 function safeParseDate(value?: string | null): Date | null {
     if (!value) return null;
@@ -59,6 +72,14 @@ function normalize(value: string | null | undefined): string {
 
 function includesText(haystack: string | null | undefined, needle: string): boolean {
     return normalize(haystack).includes(needle.toLowerCase());
+}
+
+function scopeIssuesByGroupFilter(
+    issues: JiraIssue[],
+    groupFilter?: WorkflowGroup[]
+): JiraIssue[] {
+    if (!groupFilter || groupFilter.length === 0) return issues;
+    return applyGroupFilter(issues, groupFilter);
 }
 
 function getMostRecentDate(sprint: Sprint): Date {
@@ -161,6 +182,7 @@ export interface CycleLeadTimeDistributionFilters {
     metric?: CycleLeadMetric;
     issueTypes?: string[];
     bucketSizeDays?: number;
+    groupFilter?: WorkflowGroup[];
 }
 
 export interface DistributionPercentiles {
@@ -587,11 +609,12 @@ export function getCycleLeadTimeDistribution(
 ): CycleLeadTimeDistribution {
     const issues = Array.isArray(input) ? input : input.issues;
     const distributionFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, distributionFilters.groupFilter);
     const metric: CycleLeadMetric = distributionFilters.metric || 'cycle';
     const selectedTypes = new Set((distributionFilters.issueTypes || []).map((type) => type.toLowerCase()));
     const grouped = new Map<string, DistributionDataPoint[]>();
 
-    for (const issue of issues) {
+    for (const issue of scopedIssues) {
         if (selectedTypes.size > 0 && !selectedTypes.has(issue.issueType.toLowerCase())) {
             continue;
         }
@@ -687,6 +710,27 @@ export interface FocusMetrics {
     byPriority: GroupCountMetric[];
 }
 
+export interface AssigneeWorkloadFilters {
+    workloadThreshold?: number;
+    now?: Date;
+    includeUnassigned?: boolean;
+    groupFilter?: WorkflowGroup[];
+}
+
+export interface AssigneeWorkloadRow {
+    accountId: string | null;
+    displayName: string;
+    avatarUrl: string | null;
+    openTickets: number;
+    openPoints: number;
+    inProgressTickets: number;
+    inProgressPoints: number;
+    blockedCount: number;
+    overdueCount: number;
+    totalPoints: number;
+    overloaded: boolean;
+}
+
 export function calculateFocusMetrics(
     issues: JiraIssue[],
     staleThresholdDays = 7
@@ -718,6 +762,82 @@ export function calculateFocusMetrics(
         byIssueType: buildGroupMetrics(activeIssues, (issue) => issue.issueType, staleThresholdDays),
         byPriority: buildGroupMetrics(activeIssues, (issue) => issue.priority || 'No Priority', staleThresholdDays),
     };
+}
+
+export function getAssigneeWorkload(
+    input: JiraIssue[] | ({ issues: JiraIssue[] } & AssigneeWorkloadFilters),
+    filters: AssigneeWorkloadFilters = {}
+): AssigneeWorkloadRow[] {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const resolvedFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, resolvedFilters.groupFilter);
+    const workloadThreshold = resolvedFilters.workloadThreshold ?? 13;
+    const now = resolvedFilters.now || new Date();
+    const includeUnassigned = resolvedFilters.includeUnassigned === true;
+
+    const byAssignee = new Map<string, AssigneeWorkloadRow>();
+
+    for (const issue of scopedIssues) {
+        if (isClosed(issue.status)) continue;
+
+        const assigneeId = issue.assignee?.accountId || null;
+        const assigneeName = issue.assignee?.displayName || 'Unassigned';
+
+        if (!includeUnassigned && !assigneeId) continue;
+
+        const key = assigneeId || 'unassigned';
+        const row = byAssignee.get(key) || {
+            accountId: assigneeId,
+            displayName: assigneeName,
+            avatarUrl: issue.assignee?.avatarUrl || null,
+            openTickets: 0,
+            openPoints: 0,
+            inProgressTickets: 0,
+            inProgressPoints: 0,
+            blockedCount: 0,
+            overdueCount: 0,
+            totalPoints: 0,
+            overloaded: false,
+        };
+
+        const points = issue.storyPoints || 0;
+        if (issue.status === 'In Progress') {
+            row.inProgressTickets += 1;
+            row.inProgressPoints += points;
+        } else {
+            row.openTickets += 1;
+            row.openPoints += points;
+        }
+
+        if (issue.status === 'Blocked') {
+            row.blockedCount += 1;
+        }
+
+        const daysUntilDue = getDaysUntilDue(issue, now);
+        if (daysUntilDue !== null && daysUntilDue < 0) {
+            row.overdueCount += 1;
+        }
+
+        byAssignee.set(key, row);
+    }
+
+    return [...byAssignee.values()]
+        .map((row) => {
+            const totalPoints = Number((row.openPoints + row.inProgressPoints).toFixed(1));
+            return {
+                ...row,
+                totalPoints,
+                openPoints: Number(row.openPoints.toFixed(1)),
+                inProgressPoints: Number(row.inProgressPoints.toFixed(1)),
+                overloaded: totalPoints > workloadThreshold,
+            };
+        })
+        .sort((a, b) => {
+            if (a.overloaded !== b.overloaded) return a.overloaded ? -1 : 1;
+            if (b.openPoints !== a.openPoints) return b.openPoints - a.openPoints;
+            if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+            return a.displayName.localeCompare(b.displayName);
+        });
 }
 
 export type WorkMixBucket =
@@ -924,6 +1044,165 @@ function statusAtDate(issue: JiraIssue, date: Date): IssueStatus {
     return status;
 }
 
+export type StatusTransitionDirection = 'forward' | 'backward' | 'lateral';
+export type StatusTransitionView = 'all' | 'bottleneck';
+
+export interface StatusTransitionPair {
+    fromStatus: string;
+    toStatus: string;
+    count: number;
+    direction: StatusTransitionDirection;
+}
+
+export interface StatusTransitionFlowFilters {
+    view?: StatusTransitionView;
+    groupFilter?: WorkflowGroup[];
+}
+
+export interface StatusTransitionFlow {
+    transitions: StatusTransitionPair[];
+    ticketsWithBackward: number;
+    totalTickets: number;
+    backwardTicketPercent: number;
+    nodeTicketCounts: Record<string, number>;
+    bottleneckStatuses: string[];
+    avgTimeByStatus: Record<string, number>;
+    medianStatusDays: number;
+}
+
+function median(values: number[]): number {
+    if (values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    if (sorted.length % 2 === 0) {
+        return (sorted[middle - 1] + sorted[middle]) / 2;
+    }
+    return sorted[middle];
+}
+
+function getTransitionDirection(fromStatus: string, toStatus: string): StatusTransitionDirection {
+    const fromIndex = getStageIndexByGroup(fromStatus);
+    const toIndex = getStageIndexByGroup(toStatus);
+
+    if (toIndex > fromIndex) return 'forward';
+    if (toIndex < fromIndex) return 'backward';
+    return 'lateral';
+}
+
+export function getStatusTransitionFlow(
+    input: JiraIssue[] | ({ issues: JiraIssue[] } & StatusTransitionFlowFilters),
+    filters: StatusTransitionFlowFilters = {}
+): StatusTransitionFlow {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const resolvedFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, resolvedFilters.groupFilter);
+    const view: StatusTransitionView = resolvedFilters.view || 'all';
+
+    const transitionMap = new Map<string, StatusTransitionPair>();
+    const groupDurationTotal = new Map<string, number>();
+    const groupDurationCount = new Map<string, number>();
+    const groupTicketSets = new Map<string, Set<string>>();
+
+    let ticketsWithBackward = 0;
+    const totalTickets = scopedIssues.length;
+
+    for (const issue of scopedIssues) {
+        const statusChanges = issue.changelog
+            .filter((entry) => includesText(entry.field, 'status'))
+            .sort((a, b) => a.created.localeCompare(b.created));
+
+        const touchedGroups = new Set<string>();
+        let sawBackward = false;
+
+        for (const change of statusChanges) {
+            const fromGroup = resolveWorkflowGroup(change.fromString);
+            const toGroup = resolveWorkflowGroup(change.toString);
+            if (!fromGroup || !toGroup || fromGroup === toGroup) continue;
+
+            touchedGroups.add(fromGroup);
+            touchedGroups.add(toGroup);
+
+            const direction = getTransitionDirection(fromGroup, toGroup);
+            if (direction === 'backward') sawBackward = true;
+
+            const key = `${fromGroup}||${toGroup}`;
+            const existing = transitionMap.get(key);
+            if (existing) {
+                existing.count += 1;
+            } else {
+                transitionMap.set(key, {
+                    fromStatus: fromGroup,
+                    toStatus: toGroup,
+                    count: 1,
+                    direction,
+                });
+            }
+        }
+
+        if (sawBackward) ticketsWithBackward += 1;
+
+        const durations = getStatusDurations(issue);
+        for (const [status, value] of Object.entries(durations)) {
+            if (!value || value <= 0) continue;
+            const group = resolveWorkflowGroup(status);
+            if (!group) continue;
+            touchedGroups.add(group);
+            groupDurationTotal.set(group, (groupDurationTotal.get(group) || 0) + value);
+            groupDurationCount.set(group, (groupDurationCount.get(group) || 0) + 1);
+        }
+
+        const currentGroup = resolveWorkflowGroup(issue.status);
+        if (currentGroup) {
+            touchedGroups.add(currentGroup);
+        }
+
+        for (const group of touchedGroups) {
+            const keys = groupTicketSets.get(group) || new Set<string>();
+            keys.add(issue.key);
+            groupTicketSets.set(group, keys);
+        }
+    }
+
+    const avgTimeByStatus: Record<string, number> = {};
+    for (const [group, total] of groupDurationTotal.entries()) {
+        const count = groupDurationCount.get(group) || 0;
+        if (count <= 0) continue;
+        avgTimeByStatus[group] = Number((total / count).toFixed(1));
+    }
+
+    const medianStatusDays = median(Object.values(avgTimeByStatus));
+    const bottleneckStatuses = Object.entries(avgTimeByStatus)
+        .filter(([, avg]) => medianStatusDays > 0 && avg > medianStatusDays * 2)
+        .map(([status]) => status);
+
+    let transitions = [...transitionMap.values()].sort((a, b) => {
+        const fromDiff = getStageIndexByGroup(a.fromStatus) - getStageIndexByGroup(b.fromStatus);
+        if (fromDiff !== 0) return fromDiff;
+        const toDiff = getStageIndexByGroup(a.toStatus) - getStageIndexByGroup(b.toStatus);
+        if (toDiff !== 0) return toDiff;
+        return b.count - a.count;
+    });
+    if (view === 'bottleneck') {
+        const bottleneckSet = new Set(bottleneckStatuses);
+        transitions = transitions.filter((pair) => bottleneckSet.has(pair.fromStatus));
+    }
+
+    const nodeTicketCounts = Object.fromEntries(
+        WORKFLOW_GROUP_ORDER.map((group) => [group, groupTicketSets.get(group)?.size || 0])
+    ) as Record<string, number>;
+
+    return {
+        transitions,
+        ticketsWithBackward,
+        totalTickets,
+        backwardTicketPercent: safePercent(ticketsWithBackward, totalTickets),
+        nodeTicketCounts,
+        bottleneckStatuses,
+        avgTimeByStatus,
+        medianStatusDays: Number(medianStatusDays.toFixed(1)),
+    };
+}
+
 export interface WorkflowStageMetric {
     stage: WorkflowStage;
     label: string;
@@ -1070,9 +1349,263 @@ export interface BugsMetrics {
     arrivalVsClosureTrend: { week: string; opened: number; closed: number }[];
 }
 
+export type SLAUrgency =
+    | 'Overdue'
+    | 'Due Today'
+    | 'Due This Week'
+    | 'Due Soon'
+    | 'On Track';
+
+export interface SLAIssueRow {
+    issue: JiraIssue;
+    dueDate: string;
+    daysUntilDue: number;
+    urgency: SLAUrgency;
+    urgencyRank: number;
+}
+
+export interface SLAStatusFilters {
+    includeResolved?: boolean;
+    now?: Date;
+    groupFilter?: WorkflowGroup[];
+}
+
+export interface SLAStatusMetrics {
+    totalWithDueDate: number;
+    byUrgency: Record<SLAUrgency, number>;
+    rows: SLAIssueRow[];
+    atRisk: SLAIssueRow[];
+}
+
+export interface SLATrendPoint {
+    date: string;
+    overdue: number;
+    dueToday: number;
+    dueThisWeek: number;
+    atRisk: number;
+    totalTracked: number;
+}
+
+export interface SLATrendFilters {
+    days?: number;
+    now?: Date;
+    includeResolved?: boolean;
+    groupFilter?: WorkflowGroup[];
+}
+
+export interface SLAAssigneeBreachRow {
+    assignee: string;
+    tracked: number;
+    atRisk: number;
+    overdue: number;
+    dueToday: number;
+    breachRate: number;
+}
+
+export interface SLAAssigneeBreachFilters {
+    now?: Date;
+    includeResolved?: boolean;
+    groupFilter?: WorkflowGroup[];
+}
+
+function getSLAUrgency(daysUntilDue: number): SLAUrgency {
+    if (daysUntilDue < 0) return 'Overdue';
+    if (daysUntilDue === 0) return 'Due Today';
+    if (daysUntilDue <= 7) return 'Due This Week';
+    if (daysUntilDue <= 14) return 'Due Soon';
+    return 'On Track';
+}
+
+function getSLAUrgencyRank(urgency: SLAUrgency): number {
+    switch (urgency) {
+    case 'Overdue':
+        return 0;
+    case 'Due Today':
+        return 1;
+    case 'Due This Week':
+        return 2;
+    case 'Due Soon':
+        return 3;
+    case 'On Track':
+    default:
+        return 4;
+    }
+}
+
+function buildSLAUrgencyCount(): Record<SLAUrgency, number> {
+    return {
+        Overdue: 0,
+        'Due Today': 0,
+        'Due This Week': 0,
+        'Due Soon': 0,
+        'On Track': 0,
+    };
+}
+
+function isIssueOpenAtDate(issue: JiraIssue, date: Date): boolean {
+    const created = safeParseDate(issue.created);
+    if (!created) return false;
+    if (created > endOfDay(date)) return false;
+
+    const resolved = safeParseDate(issue.resolved);
+    if (!resolved) return true;
+    return resolved > endOfDay(date);
+}
+
+export function getSLAStatus(
+    input: JiraIssue[] | ({ issues: JiraIssue[] } & SLAStatusFilters),
+    filters: SLAStatusFilters = {}
+): SLAStatusMetrics {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const resolvedFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, resolvedFilters.groupFilter);
+    const includeResolved = Boolean(resolvedFilters.includeResolved);
+    const now = resolvedFilters.now || new Date();
+
+    const byUrgency = buildSLAUrgencyCount();
+    const rows: SLAIssueRow[] = [];
+    let totalWithDueDate = 0;
+
+    for (const issue of scopedIssues) {
+        const hasDueDate = Boolean(issue.dueDate);
+        if (!hasDueDate) continue;
+        if (!includeResolved && isClosed(issue.status)) continue;
+
+        const daysUntilDue = getDaysUntilDue(issue, now);
+        if (daysUntilDue === null) continue;
+        totalWithDueDate += 1;
+
+        const urgency = getSLAUrgency(daysUntilDue);
+        byUrgency[urgency] += 1;
+        rows.push({
+            issue,
+            dueDate: issue.dueDate as string,
+            daysUntilDue,
+            urgency,
+            urgencyRank: getSLAUrgencyRank(urgency),
+        });
+    }
+
+    rows.sort((a, b) => {
+        if (a.daysUntilDue !== b.daysUntilDue) return a.daysUntilDue - b.daysUntilDue;
+        return b.issue.updated.localeCompare(a.issue.updated);
+    });
+
+    return {
+        totalWithDueDate,
+        byUrgency,
+        rows,
+        atRisk: rows.filter((row) => row.urgency === 'Overdue' || row.urgency === 'Due Today'),
+    };
+}
+
+export function getSLATrend(
+    input: JiraIssue[] | ({ issues: JiraIssue[] } & SLATrendFilters),
+    filters: SLATrendFilters = {}
+): SLATrendPoint[] {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const resolvedFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, resolvedFilters.groupFilter);
+    const now = resolvedFilters.now || new Date();
+    const days = Math.max(7, resolvedFilters.days || 28);
+    const includeResolved = Boolean(resolvedFilters.includeResolved);
+
+    const points: SLATrendPoint[] = [];
+
+    for (let offset = days - 1; offset >= 0; offset -= 1) {
+        const day = startOfDay(subDays(now, offset));
+        let overdue = 0;
+        let dueToday = 0;
+        let dueThisWeek = 0;
+        let totalTracked = 0;
+
+        for (const issue of scopedIssues) {
+            if (!issue.dueDate) continue;
+            if (!includeResolved && !isIssueOpenAtDate(issue, day)) continue;
+
+            const daysUntilDue = getDaysUntilDue(issue, day);
+            if (daysUntilDue === null) continue;
+
+            totalTracked += 1;
+            if (daysUntilDue < 0) {
+                overdue += 1;
+            } else if (daysUntilDue === 0) {
+                dueToday += 1;
+            } else if (daysUntilDue <= 7) {
+                dueThisWeek += 1;
+            }
+        }
+
+        points.push({
+            date: format(day, 'MMM d'),
+            overdue,
+            dueToday,
+            dueThisWeek,
+            atRisk: overdue + dueToday,
+            totalTracked,
+        });
+    }
+
+    return points;
+}
+
+export function getSLAAssigneeBreach(
+    input: JiraIssue[] | ({ issues: JiraIssue[] } & SLAAssigneeBreachFilters),
+    filters: SLAAssigneeBreachFilters = {}
+): SLAAssigneeBreachRow[] {
+    const issues = Array.isArray(input) ? input : input.issues;
+    const resolvedFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, resolvedFilters.groupFilter);
+    const now = resolvedFilters.now || new Date();
+    const includeResolved = Boolean(resolvedFilters.includeResolved);
+
+    const byAssignee = new Map<string, SLAAssigneeBreachRow>();
+
+    for (const issue of scopedIssues) {
+        if (!issue.dueDate) continue;
+        if (!includeResolved && !isIssueOpenAtDate(issue, now)) continue;
+
+        const daysUntilDue = getDaysUntilDue(issue, now);
+        if (daysUntilDue === null) continue;
+
+        const assignee = issue.assignee?.displayName || 'Unassigned';
+        const row = byAssignee.get(assignee) || {
+            assignee,
+            tracked: 0,
+            atRisk: 0,
+            overdue: 0,
+            dueToday: 0,
+            breachRate: 0,
+        };
+
+        row.tracked += 1;
+        if (daysUntilDue < 0) {
+            row.overdue += 1;
+            row.atRisk += 1;
+        } else if (daysUntilDue === 0) {
+            row.dueToday += 1;
+            row.atRisk += 1;
+        }
+
+        byAssignee.set(assignee, row);
+    }
+
+    return [...byAssignee.values()]
+        .map((row) => ({
+            ...row,
+            breachRate: safePercent(row.atRisk, row.tracked),
+        }))
+        .sort((a, b) => {
+            if (b.atRisk !== a.atRisk) return b.atRisk - a.atRisk;
+            if (b.breachRate !== a.breachRate) return b.breachRate - a.breachRate;
+            return b.tracked - a.tracked;
+        });
+}
+
 export interface ReopenRateFilters {
     windowDays?: number;
     now?: Date;
+    groupFilter?: WorkflowGroup[];
 }
 
 export interface ReopenRateTicket {
@@ -1128,12 +1661,13 @@ export function getReopenRates(
 ): ReopenRateMetrics {
     const issues = Array.isArray(input) ? input : input.issues;
     const resolvedFilters = Array.isArray(input) ? filters : input;
+    const scopedIssues = scopeIssuesByGroupFilter(issues, resolvedFilters.groupFilter);
     const windowDays = resolvedFilters.windowDays || 30;
     const now = resolvedFilters.now || new Date();
     const currentStart = subDays(now, windowDays);
     const previousStart = subDays(currentStart, windowDays);
 
-    const bugReopenRows = issues
+    const bugReopenRows = scopedIssues
         .filter((issue) => issue.issueType === 'Bug')
         .map((issue) => ({
             issue,
@@ -1196,6 +1730,24 @@ export function getReopenRates(
 
 export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {
     const bugs = issues.filter((issue) => issue.issueType === 'Bug');
+    const epicSummaryByKey = new Map<string, string>();
+
+    for (const issue of issues) {
+        if (isEpicIssue(issue)) {
+            epicSummaryByKey.set(issue.key, issue.summary);
+        }
+        if (
+            issue.epicKey &&
+            issue.epicSummary &&
+            issue.epicSummary.trim().length > 0 &&
+            issue.epicSummary !== issue.epicKey
+        ) {
+            epicSummaryByKey.set(issue.epicKey, issue.epicSummary);
+        }
+        if (issue.key && issue.summary) {
+            epicSummaryByKey.set(issue.key, issue.summary);
+        }
+    }
 
     const byPriorityMap = new Map<string, number>();
     const bySprintMap = new Map<string, number>();
@@ -1212,7 +1764,13 @@ export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {
         const assignee = bug.assignee?.displayName || 'Unassigned';
         byAssigneeMap.set(assignee, (byAssigneeMap.get(assignee) || 0) + 1);
 
-        const area = bug.components[0] || formatEpicLabel(bug) || bug.project || 'General';
+        const epicSummary = bug.epicKey ? epicSummaryByKey.get(bug.epicKey) || bug.epicSummary : bug.epicSummary;
+        const area = bug.components[0]
+            || (bug.epicKey || epicSummary
+                ? formatEpicLabel({ epicKey: bug.epicKey, epicSummary: epicSummary || null })
+                : '')
+            || bug.project
+            || 'General';
         byAreaMap.set(area, (byAreaMap.get(area) || 0) + 1);
     }
 

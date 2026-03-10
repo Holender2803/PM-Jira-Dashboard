@@ -1,6 +1,6 @@
 'use client';
 import { useMemo } from 'react';
-import { useFilteredIssues } from '@/store/app-store';
+import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
 import { StatCard } from '@/components/ui/Badges';
 import IssueTable from '@/components/tables/IssueTable';
@@ -22,8 +22,12 @@ import {
 
 export default function BugsPage() {
     const filtered = useFilteredIssues();
+    const workflowGroupFilter = useAppStore((state) => state.workflowGroupFilter);
     const metrics = useMemo(() => calculateBugMetrics(filtered), [filtered]);
-    const reopenRates = useMemo(() => getReopenRates(filtered), [filtered]);
+    const reopenRates = useMemo(
+        () => getReopenRates(filtered, { groupFilter: workflowGroupFilter }),
+        [filtered, workflowGroupFilter]
+    );
 
     return (
         <div>
