@@ -5,7 +5,7 @@ import {
     normalizeWorkflowGroupFilter,
     resolveWorkflowGroup,
     WORKFLOW_GROUP_ORDER,
-} from './workflow-groups';
+} from './statusGroups';
 
 function safeParseDate(value: string | null | undefined): Date | null {
     if (!value) return null;

@@ -30,10 +30,12 @@ import {
 import { formatEpicLabel, isEpicIssue } from './issue-format';
 import { applyGroupFilter, getDaysUntilDue } from './filters';
 import {
+    getStatusesForGroups,
+    isAllWorkflowGroupsSelected,
     getStageIndexByGroup,
     resolveWorkflowGroup,
     WORKFLOW_GROUP_ORDER,
-} from './workflow-groups';
+} from './statusGroups';
 
 function safeParseDate(value?: string | null): Date | null {
     if (!value) return null;
@@ -80,6 +82,26 @@ function scopeIssuesByGroupFilter(
 ): JiraIssue[] {
     if (!groupFilter || groupFilter.length === 0) return issues;
     return applyGroupFilter(issues, groupFilter);
+}
+
+function escapeSqlLiteral(value: string): string {
+    return value.replace(/'/g, "''");
+}
+
+export function buildGroupWhereClause(groups: string[]): string {
+    if (!groups || groups.length === 0 || isAllWorkflowGroupsSelected(groups)) {
+        return '';
+    }
+
+    const statuses = getStatusesForGroups(groups);
+    if (statuses.length === 0) {
+        return '';
+    }
+
+    const statusList = statuses
+        .map((status) => `'${escapeSqlLiteral(status)}'`)
+        .join(',');
+    return `AND status IN (${statusList})`;
 }
 
 function getMostRecentDate(sprint: Sprint): Date {
@@ -1260,6 +1282,67 @@ export interface WorkflowMetrics {
     cumulativeFlow: { date: string; open: number; closed: number; blocked: number }[];
 }
 
+export type BugPriorityBucket = 'Emergency' | 'High' | 'Medium' | 'Low' | 'None';
+
+export const BUG_PRIORITY_ORDER: BugPriorityBucket[] = [
+    'Emergency',
+    'High',
+    'Medium',
+    'Low',
+    'None',
+];
+
+export const BUG_PRIORITY_COLORS: Record<BugPriorityBucket, string> = {
+    Emergency: '#ef4444',
+    High: '#f97316',
+    Medium: '#eab308',
+    Low: '#3b82f6',
+    None: '#64748b',
+};
+
+function trimText(value: string | null | undefined): string {
+    return (value || '').trim();
+}
+
+function isJiraKeyLike(value: string | null | undefined): boolean {
+    return /^[A-Z][A-Z0-9]+-\d+$/.test(trimText(value));
+}
+
+function toBugPriorityBucket(priority: string | null | undefined): BugPriorityBucket {
+    const normalized = trimText(priority).toLowerCase();
+    if (!normalized) return 'None';
+    if (
+        normalized.includes('emergency') ||
+        normalized.includes('critical') ||
+        normalized.includes('blocker') ||
+        normalized.includes('highest')
+    ) {
+        return 'Emergency';
+    }
+    if (normalized.includes('high')) return 'High';
+    if (normalized.includes('medium')) return 'Medium';
+    if (normalized.includes('low') || normalized.includes('lowest')) return 'Low';
+    return 'None';
+}
+
+function truncateLabel(value: string, maxLength = 30): string {
+    const trimmed = trimText(value);
+    if (trimmed.length <= maxLength) return trimmed;
+    return `${trimmed.slice(0, maxLength - 3)}...`;
+}
+
+function getResolutionDays(issue: JiraIssue): number | null {
+    const created = safeParseDate(issue.created);
+    const resolved = safeParseDate(issue.resolved);
+    if (!created || !resolved) return null;
+    return Math.max(0, differenceInCalendarDays(resolved, created));
+}
+
+function averageOrNull(values: number[]): number | null {
+    if (values.length === 0) return null;
+    return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1));
+}
+
 export function calculateWorkflowMetrics(issues: JiraIssue[]): WorkflowMetrics {
     const byStatus = buildStatusCountRecord();
     const totalDuration = buildStatusCountRecord();
@@ -1376,11 +1459,22 @@ export interface BugsMetrics {
     open: number;
     inProgress: number;
     closed: number;
-    byPriority: { priority: string; count: number }[];
+    byPriority: { priority: BugPriorityBucket; count: number; color: string }[];
     bySprint: { sprint: string; count: number }[];
     byAssignee: { assignee: string; count: number }[];
-    byArea: { area: string; count: number }[];
+    byArea: {
+        area: string;
+        areaFull: string;
+        tooltip: string;
+        epicKey: string | null;
+        count: number;
+    }[];
     avgResolutionDays: number;
+    mttrLast30Days: number | null;
+    mttrPrior30Days: number | null;
+    mttrTrendVsPrior30Days: number | null;
+    mttrClosedCountLast30Days: number;
+    mttrClosedCountPrior30Days: number;
     oldestUnresolved: JiraIssue[];
     arrivalVsClosureTrend: { week: string; opened: number; closed: number }[];
 }
@@ -1780,18 +1874,23 @@ export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {
         ) {
             epicSummaryByKey.set(issue.epicKey, issue.epicSummary);
         }
-        if (issue.key && issue.summary) {
-            epicSummaryByKey.set(issue.key, issue.summary);
-        }
     }
 
-    const byPriorityMap = new Map<string, number>();
+    const byPriorityMap = new Map<BugPriorityBucket, number>(
+        BUG_PRIORITY_ORDER.map((priority) => [priority, 0])
+    );
     const bySprintMap = new Map<string, number>();
     const byAssigneeMap = new Map<string, number>();
-    const byAreaMap = new Map<string, number>();
+    const byAreaMap = new Map<string, {
+        area: string;
+        areaFull: string;
+        tooltip: string;
+        epicKey: string | null;
+        count: number;
+    }>();
 
     for (const bug of bugs) {
-        const priority = bug.priority || 'No Priority';
+        const priority = toBugPriorityBucket(bug.priority);
         byPriorityMap.set(priority, (byPriorityMap.get(priority) || 0) + 1);
 
         const sprintName = bug.sprint?.name || 'No Sprint';
@@ -1800,19 +1899,53 @@ export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {
         const assignee = bug.assignee?.displayName || 'Unassigned';
         byAssigneeMap.set(assignee, (byAssigneeMap.get(assignee) || 0) + 1);
 
-        const epicSummary = bug.epicKey ? epicSummaryByKey.get(bug.epicKey) || bug.epicSummary : bug.epicSummary;
-        const area = bug.components[0]
-            || (bug.epicKey || epicSummary
-                ? formatEpicLabel({ epicKey: bug.epicKey, epicSummary: epicSummary || null })
-                : '')
-            || bug.project
-            || 'General';
-        byAreaMap.set(area, (byAreaMap.get(area) || 0) + 1);
+        const primaryComponent = trimText(bug.components[0]);
+        let areaGroupKey = '';
+        let areaFull = '';
+        let tooltip = '';
+        let epicKey: string | null = null;
+
+        if (primaryComponent) {
+            areaGroupKey = `component:${primaryComponent.toLowerCase()}`;
+            areaFull = primaryComponent;
+            tooltip = primaryComponent;
+        } else if (bug.epicKey) {
+            epicKey = bug.epicKey;
+            const resolvedEpicSummary = trimText(
+                epicSummaryByKey.get(bug.epicKey) || bug.epicSummary
+            );
+            const epicName = resolvedEpicSummary && !isJiraKeyLike(resolvedEpicSummary)
+                ? resolvedEpicSummary
+                : 'Unknown Epic';
+
+            areaGroupKey = `epic:${bug.epicKey}`;
+            areaFull = epicName;
+            tooltip = `${bug.epicKey} — ${epicName}`;
+        } else {
+            areaGroupKey = 'unlinked';
+            areaFull = 'No Epic / Unlinked';
+            tooltip = 'No Epic / Unlinked';
+        }
+
+        const areaLabel = truncateLabel(areaFull, 30);
+        const existingArea = byAreaMap.get(areaGroupKey);
+        if (existingArea) {
+            existingArea.count += 1;
+        } else {
+            byAreaMap.set(areaGroupKey, {
+                area: areaLabel,
+                areaFull,
+                tooltip,
+                epicKey,
+                count: 1,
+            });
+        }
     }
 
     const resolvedDurations = bugs
-        .filter((bug) => isClosed(bug.status) && bug.leadTime !== null)
-        .map((bug) => bug.leadTime as number);
+        .filter((bug) => isClosed(bug.status))
+        .map((bug) => getResolutionDays(bug))
+        .filter((duration): duration is number => duration !== null);
 
     const avgResolutionDays =
         resolvedDurations.length > 0
@@ -1823,6 +1956,33 @@ export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {
                 ).toFixed(1)
             )
             : 0;
+
+    const now = new Date();
+    const currentWindowStart = subDays(now, 30);
+    const priorWindowStart = subDays(currentWindowStart, 30);
+
+    const closedWithResolution = bugs
+        .map((bug) => ({
+            resolvedAt: safeParseDate(bug.resolved),
+            resolutionDays: getResolutionDays(bug),
+        }))
+        .filter((row): row is { resolvedAt: Date; resolutionDays: number } =>
+            Boolean(row.resolvedAt) && row.resolutionDays !== null
+        );
+
+    const mttrCurrentWindowDurations = closedWithResolution
+        .filter((row) => row.resolvedAt >= currentWindowStart && row.resolvedAt <= now)
+        .map((row) => row.resolutionDays);
+    const mttrPriorWindowDurations = closedWithResolution
+        .filter((row) => row.resolvedAt >= priorWindowStart && row.resolvedAt < currentWindowStart)
+        .map((row) => row.resolutionDays);
+
+    const mttrLast30Days = averageOrNull(mttrCurrentWindowDurations);
+    const mttrPrior30Days = averageOrNull(mttrPriorWindowDurations);
+    const mttrTrendVsPrior30Days =
+        mttrLast30Days !== null && mttrPrior30Days !== null
+            ? Number((mttrLast30Days - mttrPrior30Days).toFixed(1))
+            : null;
 
     const arrivalVsClosureTrend: { week: string; opened: number; closed: number }[] = [];
     for (let weekOffset = 7; weekOffset >= 0; weekOffset -= 1) {
@@ -1851,19 +2011,28 @@ export function calculateBugMetrics(issues: JiraIssue[]): BugsMetrics {
         open: bugs.filter((bug) => !isClosed(bug.status) && !isActive(bug.status)).length,
         inProgress: bugs.filter((bug) => isActive(bug.status)).length,
         closed: bugs.filter((bug) => isClosed(bug.status)).length,
-        byPriority: [...byPriorityMap.entries()]
-            .map(([priority, count]) => ({ priority, count }))
-            .sort((a, b) => b.count - a.count),
+        byPriority: BUG_PRIORITY_ORDER.map((priority) => ({
+            priority,
+            count: byPriorityMap.get(priority) || 0,
+            color: BUG_PRIORITY_COLORS[priority],
+        })),
         bySprint: [...bySprintMap.entries()]
             .map(([sprint, count]) => ({ sprint, count }))
             .sort((a, b) => b.count - a.count),
         byAssignee: [...byAssigneeMap.entries()]
             .map(([assignee, count]) => ({ assignee, count }))
             .sort((a, b) => b.count - a.count),
-        byArea: [...byAreaMap.entries()]
-            .map(([area, count]) => ({ area, count }))
-            .sort((a, b) => b.count - a.count),
+        byArea: [...byAreaMap.values()]
+            .sort((a, b) => {
+                if (b.count !== a.count) return b.count - a.count;
+                return a.areaFull.localeCompare(b.areaFull);
+            }),
         avgResolutionDays,
+        mttrLast30Days,
+        mttrPrior30Days,
+        mttrTrendVsPrior30Days,
+        mttrClosedCountLast30Days: mttrCurrentWindowDurations.length,
+        mttrClosedCountPrior30Days: mttrPriorWindowDurations.length,
         oldestUnresolved: bugs
             .filter((bug) => !isClosed(bug.status))
             .sort((a, b) => b.age - a.age)

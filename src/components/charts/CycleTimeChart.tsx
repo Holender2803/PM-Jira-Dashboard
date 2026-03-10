@@ -4,6 +4,7 @@ import {
     Bar,
     BarChart,
     CartesianGrid,
+    ReferenceLine,
     ResponsiveContainer,
     Tooltip,
     XAxis,
@@ -24,10 +25,41 @@ function formatIssueTypeLabel(issueType: string): string {
 export default function CycleTimeChart({ distribution, mode }: CycleTimeChartProps) {
     const metricLabel = mode === 'cycle' ? 'Cycle Time' : 'Lead Time';
     const metricColor = mode === 'cycle' ? '#06b6d4' : '#8b5cf6';
-    const histogramData = distribution.histogram.map((bin) => ({
-        bucket: bin.bucket,
-        count: bin.count,
-    }));
+    const p95CutoffDays = Math.ceil(distribution.percentiles.p95);
+    const overflowBucketLabel = `>${p95CutoffDays}d`;
+    const histogramData = distribution.histogram.reduce<Array<{
+        bucket: string;
+        count: number;
+        minDays: number;
+        maxDays: number;
+    }>>((acc, bin) => {
+        if (bin.minDays > p95CutoffDays) {
+            const existingOverflow = acc.find((item) => item.bucket === overflowBucketLabel);
+            if (existingOverflow) {
+                existingOverflow.count += bin.count;
+                existingOverflow.maxDays = Math.max(existingOverflow.maxDays, bin.maxDays);
+            } else {
+                acc.push({
+                    bucket: overflowBucketLabel,
+                    count: bin.count,
+                    minDays: p95CutoffDays + 1,
+                    maxDays: bin.maxDays,
+                });
+            }
+            return acc;
+        }
+
+        acc.push({
+            bucket: bin.bucket,
+            count: bin.count,
+            minDays: bin.minDays,
+            maxDays: bin.maxDays,
+        });
+        return acc;
+    }, []);
+    const medianBucket = histogramData.find(
+        (bin) => distribution.percentiles.p50 >= bin.minDays && distribution.percentiles.p50 <= bin.maxDays
+    )?.bucket;
 
     if (distribution.totalPoints === 0) {
         return (
@@ -84,11 +116,15 @@ export default function CycleTimeChart({ distribution, mode }: CycleTimeChartPro
             </div>
 
             <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={histogramData}>
+                <BarChart data={histogramData} margin={{ top: 10, right: 12, bottom: 28, left: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                     <XAxis
                         dataKey="bucket"
-                        tick={{ fontSize: 11, fill: 'var(--text-secondary)' }}
+                        tick={{ fontSize: 10, fill: 'var(--text-secondary)' }}
+                        angle={-45}
+                        textAnchor="end"
+                        interval={0}
+                        height={62}
                         axisLine={false}
                         tickLine={false}
                     />
@@ -98,6 +134,15 @@ export default function CycleTimeChart({ distribution, mode }: CycleTimeChartPro
                         tickLine={false}
                         allowDecimals={false}
                     />
+                    {medianBucket && (
+                        <ReferenceLine
+                            x={medianBucket}
+                            stroke="#f59e0b"
+                            strokeDasharray="4 4"
+                            ifOverflow="visible"
+                            label={{ value: 'Median', position: 'top', fill: '#f59e0b', fontSize: 10 }}
+                        />
+                    )}
                     <Tooltip
                         formatter={(value) => [`${value} tickets`, 'Count']}
                         labelFormatter={(label) => `${metricLabel}: ${label}`}

@@ -71,6 +71,15 @@ function initSchema(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_issues_created ON issues(created);
     CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project);
 
+    CREATE TABLE IF NOT EXISTS epics (
+      key TEXT PRIMARY KEY,
+      summary TEXT NOT NULL,
+      updated_at TEXT,
+      source TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_epics_updated_at ON epics(updated_at);
+
     CREATE TABLE IF NOT EXISTS sprints (
       id INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
@@ -116,6 +125,34 @@ function initSchema(db: Database.Database) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS bug_tracking_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      bug_source_label TEXT NOT NULL DEFAULT 'source',
+      production_keywords TEXT NOT NULL DEFAULT 'production, prod, client-reported, escaped',
+      qa_keywords TEXT NOT NULL DEFAULT 'qa, testing, internal, caught-in-qa',
+      configured INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
+  `);
+
+    // Backfill epics table for existing databases created before epics persistence.
+    db.exec(`
+    INSERT OR IGNORE INTO epics (key, summary, updated_at, source)
+    SELECT key, summary, updated, 'issues_backfill'
+    FROM issues
+    WHERE LOWER(issue_type) = 'epic'
+      AND summary IS NOT NULL
+      AND TRIM(summary) <> '';
+
+    INSERT OR IGNORE INTO epics (key, summary, updated_at, source)
+    SELECT epic_key, epic_summary, updated, 'issues_backfill'
+    FROM issues
+    WHERE epic_key IS NOT NULL
+      AND TRIM(epic_key) <> ''
+      AND epic_summary IS NOT NULL
+      AND TRIM(epic_summary) <> ''
+      AND epic_summary <> epic_key;
   `);
 
     // Ensure built-in saved views exist.

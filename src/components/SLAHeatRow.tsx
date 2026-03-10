@@ -3,6 +3,7 @@ import { format, parseISO } from 'date-fns';
 import { ExternalLink } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import { StatusBadge } from '@/components/ui/Badges';
+import IssueKeyButton from '@/components/tables/IssueKeyButton';
 import { SLAIssueRow } from '@/lib/analytics';
 import { JiraIssue } from '@/types';
 
@@ -75,7 +76,13 @@ export default function SLAHeatRow({ row, onOpenIssue }: SLAHeatRowProps) {
                         {row.issue.key}
                     </button>
                 ) : (
-                    row.issue.key
+                    <IssueKeyButton
+                        issue={row.issue}
+                        className="btn btn-ghost btn-sm"
+                        style={{ padding: 0, fontFamily: 'inherit', fontSize: 'inherit', color: 'inherit' }}
+                    >
+                        {row.issue.key}
+                    </IssueKeyButton>
                 )}
                 <a
                     href={row.issue.url}

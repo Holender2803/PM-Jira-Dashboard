@@ -14,7 +14,7 @@ import { enrichIssuesWithEpicSummaries } from '@/lib/issue-format';
 import {
     normalizeWorkflowGroupFilter,
     WORKFLOW_GROUP_ORDER,
-} from '@/lib/workflow-groups';
+} from '@/lib/statusGroups';
 
 const DEFAULT_WORKFLOW_GROUP_FILTER: WorkflowGroup[] = [...WORKFLOW_GROUP_ORDER];
 

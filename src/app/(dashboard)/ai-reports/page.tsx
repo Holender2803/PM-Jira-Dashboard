@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AIReportResponse, AIReportTone, AIReportType } from '@/types';
 import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
+import IssueKeyButton from '@/components/tables/IssueKeyButton';
 
 const REPORT_TYPES: { value: AIReportType; label: string }[] = [
     { value: 'sprint_summary', label: 'Sprint Summary' },
@@ -175,7 +176,19 @@ export default function AIReportsPage() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 360, overflowY: 'auto' }}>
                             {selectedIssues.length > 0 ? selectedIssues.map((issue) => (
                                 <div key={issue.key} style={{ borderBottom: '1px solid var(--border)', paddingBottom: 6 }}>
-                                    <div style={{ fontSize: 12, color: 'var(--accent-light)', fontFamily: 'monospace' }}>{issue.key}</div>
+                                    <IssueKeyButton
+                                        issue={issue}
+                                        className="btn btn-ghost btn-sm"
+                                        style={{
+                                            padding: 0,
+                                            fontSize: 12,
+                                            color: 'var(--accent-light)',
+                                            fontFamily: 'monospace',
+                                            fontWeight: 600,
+                                        }}
+                                    >
+                                        {issue.key}
+                                    </IssueKeyButton>
                                     <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>{issue.summary}</div>
                                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                                         {issue.status} · {issue.assignee?.displayName || 'Unassigned'}
