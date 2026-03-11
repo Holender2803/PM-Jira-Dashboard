@@ -9,6 +9,7 @@ import {
 } from '@/lib/issue-store';
 import { DashboardFilters } from '@/types';
 import { filterIssues } from '@/lib/filters';
+import { APP_CONFIG_KEYS, getAppConfigBoolean } from '@/lib/app-config';
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
@@ -80,6 +81,7 @@ export async function GET(request: Request) {
         });
         const lastSynced = getLastSyncedAt();
         const total = getTotalIssues();
+        const hasUnreadSyncBriefing = getAppConfigBoolean(APP_CONFIG_KEYS.syncBriefingUnread);
 
         return NextResponse.json({
             issues,
@@ -87,6 +89,7 @@ export async function GET(request: Request) {
             lastSynced,
             sprints: normalizedSprints,
             activeSprintEndDate,
+            hasUnreadSyncBriefing,
             demoMode: false,
         });
     } catch (error) {

@@ -1,9 +1,10 @@
 import getDb from './db';
-import { JiraIssue, DashboardFilters, Sprint } from '@/types';
+import { JiraIssue, DashboardFilters, Sprint, DocAIRating, DocGrade } from '@/types';
 import { CLOSED_STATUSES } from './workflow';
 import { isAtRiskIssue } from './filters';
 import { normalizeUtcTimestamp } from './time';
 import { buildGroupWhereClause } from './analytics';
+import { scoreTicket } from './docReadiness';
 
 function normalizeText(value: string | null | undefined): string {
     return (value || '').trim();
@@ -11,6 +12,87 @@ function normalizeText(value: string | null | undefined): string {
 
 function isJiraKeyLike(value: string | null | undefined): boolean {
     return /^[A-Z][A-Z0-9]+-\d+$/.test(normalizeText(value));
+}
+
+function normalizeDocGrade(value: string | null | undefined): DocGrade | null {
+    if (value === 'A' || value === 'B' || value === 'C' || value === 'D') {
+        return value;
+    }
+    return null;
+}
+
+function parseStringArray(raw: string | null | undefined): string[] | null {
+    if (typeof raw !== 'string') return null;
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return null;
+        return parsed.filter((value): value is string => typeof value === 'string');
+    } catch {
+        return null;
+    }
+}
+
+function parseDocAiRating(raw: string | null | undefined): DocAIRating | null {
+    if (typeof raw !== 'string' || !raw.trim()) return null;
+
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== 'object') return null;
+        const record = parsed as Record<string, unknown>;
+        const clarity = Number(record.clarity);
+        const completeness = Number(record.completeness);
+        const userImpact = Number(record.userImpact);
+        const overallScore = Number(record.overallScore);
+        const oneLineFeedback = normalizeText(typeof record.oneLineFeedback === 'string' ? record.oneLineFeedback : '');
+
+        if (![clarity, completeness, userImpact, overallScore].every((value) => Number.isFinite(value))) {
+            return null;
+        }
+
+        return {
+            clarity,
+            completeness,
+            userImpact,
+            overallScore,
+            oneLineFeedback,
+        };
+    } catch {
+        return null;
+    }
+}
+
+interface IssueDbRow {
+    raw_json: string;
+    epic_key: string | null;
+    epic_summary: string | null;
+    resolved_epic_summary: string | null;
+    doc_score: number | null;
+    doc_grade: string | null;
+    doc_missing_fields: string | null;
+    doc_ai_rating: string | null;
+}
+
+function hydrateIssueFromDbRow(row: IssueDbRow): JiraIssue {
+    const issue = JSON.parse(row.raw_json) as JiraIssue & { dueDate?: string | null };
+    const currentEpicSummary = normalizeText(issue.epicSummary);
+    const resolvedEpicSummary = normalizeText(row.resolved_epic_summary);
+    const shouldUseResolvedSummary =
+        issue.epicKey &&
+        resolvedEpicSummary &&
+        (!currentEpicSummary || currentEpicSummary === normalizeText(issue.epicKey) || isJiraKeyLike(currentEpicSummary));
+
+    const parsedMissingFields = parseStringArray(row.doc_missing_fields);
+    const parsedAiRating = parseDocAiRating(row.doc_ai_rating);
+
+    return {
+        ...issue,
+        epicSummary: shouldUseResolvedSummary ? resolvedEpicSummary : issue.epicSummary,
+        dueDate: issue.dueDate ?? null,
+        docScore: typeof row.doc_score === 'number' && Number.isFinite(row.doc_score) ? row.doc_score : issue.docScore ?? null,
+        docGrade: normalizeDocGrade(row.doc_grade) || issue.docGrade || null,
+        docMissingFields: parsedMissingFields || issue.docMissingFields || [],
+        docAiRating: parsedAiRating || issue.docAiRating || null,
+    };
 }
 
 // ─── Save issues to DB ─────────────────────────────────────────────────────────
@@ -24,14 +106,16 @@ export function upsertIssues(issues: JiraIssue[]): void {
       labels, components, parent_key, parent_summary, epic_key, epic_summary,
       sprint_id, sprint_name, sprint_state, sprint_start, sprint_end,
       story_points, created, updated, resolved, comments_count,
-      linked_issues, project, work_type, squad, url, changelog, synced_at, raw_json
+      linked_issues, project, work_type, squad, url, changelog, synced_at, raw_json,
+      doc_score, doc_grade, doc_missing_fields, doc_ai_rating, doc_ai_rated_at
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?,
-      ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?
+      ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?,
+      ?, ?, ?, ?, ?
     )
     ON CONFLICT(id) DO UPDATE SET
       key = excluded.key,
@@ -68,7 +152,12 @@ export function upsertIssues(issues: JiraIssue[]): void {
       url = excluded.url,
       changelog = excluded.changelog,
       synced_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-      raw_json = excluded.raw_json
+      raw_json = excluded.raw_json,
+      doc_score = excluded.doc_score,
+      doc_grade = excluded.doc_grade,
+      doc_missing_fields = excluded.doc_missing_fields,
+      doc_ai_rating = COALESCE(excluded.doc_ai_rating, issues.doc_ai_rating),
+      doc_ai_rated_at = COALESCE(excluded.doc_ai_rated_at, issues.doc_ai_rated_at)
   `);
     const upsertEpic = db.prepare(`
     INSERT INTO epics (key, summary, updated_at, source)
@@ -82,6 +171,16 @@ export function upsertIssues(issues: JiraIssue[]): void {
 
     const insertMany = db.transaction((issues: JiraIssue[]) => {
         for (const iss of issues) {
+            const readiness = scoreTicket(iss);
+            const docScore = typeof iss.docScore === 'number' && Number.isFinite(iss.docScore)
+                ? Math.round(Math.max(0, Math.min(100, iss.docScore)))
+                : readiness.score;
+            const docGrade = normalizeDocGrade(iss.docGrade) || readiness.grade;
+            const docMissingFields = Array.isArray(iss.docMissingFields)
+                ? iss.docMissingFields
+                : readiness.missingFields;
+            const docAiRating = iss.docAiRating ? JSON.stringify(iss.docAiRating) : null;
+
             upsert.run(
                 iss.id, iss.key, iss.summary, iss.description, iss.issueType, iss.status, iss.priority,
                 iss.assignee?.accountId || null, iss.assignee?.displayName || null, iss.assignee?.emailAddress || null,
@@ -93,6 +192,7 @@ export function upsertIssues(issues: JiraIssue[]): void {
                 iss.storyPoints, iss.created, iss.updated, iss.resolved, iss.commentsCount,
                 JSON.stringify(iss.linkedIssues), iss.project, iss.workType, iss.squad, iss.url,
                 JSON.stringify(iss.changelog), JSON.stringify(iss),
+                docScore, docGrade, JSON.stringify(docMissingFields), docAiRating, null,
             );
 
             const issueType = normalizeText(iss.issueType).toLowerCase();
@@ -212,32 +312,17 @@ export function queryIssues(filters: DashboardFilters = {}): JiraIssue[] {
       i.raw_json as raw_json,
       i.epic_key as epic_key,
       i.epic_summary as epic_summary,
-      e.summary as resolved_epic_summary
+      e.summary as resolved_epic_summary,
+      i.doc_score as doc_score,
+      i.doc_grade as doc_grade,
+      i.doc_missing_fields as doc_missing_fields,
+      i.doc_ai_rating as doc_ai_rating
     FROM issues i
     LEFT JOIN epics e ON i.epic_key = e.key
     ${where}
     ORDER BY i.updated DESC
-  `).all(...params) as {
-        raw_json: string;
-        epic_key: string | null;
-        epic_summary: string | null;
-        resolved_epic_summary: string | null;
-    }[];
-    const parsed = rows.map((row) => {
-        const issue = JSON.parse(row.raw_json) as JiraIssue & { dueDate?: string | null };
-        const currentEpicSummary = normalizeText(issue.epicSummary);
-        const resolvedEpicSummary = normalizeText(row.resolved_epic_summary);
-        const shouldUseResolvedSummary =
-            issue.epicKey &&
-            resolvedEpicSummary &&
-            (!currentEpicSummary || currentEpicSummary === normalizeText(issue.epicKey) || isJiraKeyLike(currentEpicSummary));
-
-        return {
-            ...issue,
-            epicSummary: shouldUseResolvedSummary ? resolvedEpicSummary : issue.epicSummary,
-            dueDate: issue.dueDate ?? null,
-        };
-    });
+  `).all(...params) as IssueDbRow[];
+    const parsed = rows.map((row) => hydrateIssueFromDbRow(row));
 
     if (filters.atRiskOnly) {
         return parsed.filter((issue) => isAtRiskIssue(issue));
@@ -311,13 +396,118 @@ export function getLastSyncedAt(): string | null {
 
 export function getIssueByKey(key: string): JiraIssue | null {
     const db = getDb();
-    const row = db.prepare('SELECT raw_json FROM issues WHERE key = ?').get(key) as { raw_json: string } | undefined;
+    const row = db.prepare(`
+    SELECT
+      i.raw_json as raw_json,
+      i.epic_key as epic_key,
+      i.epic_summary as epic_summary,
+      e.summary as resolved_epic_summary,
+      i.doc_score as doc_score,
+      i.doc_grade as doc_grade,
+      i.doc_missing_fields as doc_missing_fields,
+      i.doc_ai_rating as doc_ai_rating
+    FROM issues i
+    LEFT JOIN epics e ON i.epic_key = e.key
+    WHERE i.key = ?
+  `).get(key) as IssueDbRow | undefined;
     if (!row) return null;
-    const issue = JSON.parse(row.raw_json) as JiraIssue & { dueDate?: string | null };
-    return {
-        ...issue,
-        dueDate: issue.dueDate ?? null,
-    };
+    return hydrateIssueFromDbRow(row);
+}
+
+export interface CachedDocScoreRow {
+    key: string;
+    score: number;
+    grade: DocGrade;
+    missingFields: string[];
+    aiRatable: boolean;
+    aiRating: DocAIRating | null;
+    aiRatedAt: string | null;
+}
+
+export function getCachedDocScores(): CachedDocScoreRow[] {
+    const db = getDb();
+    const rows = db.prepare(`
+    SELECT
+      key,
+      raw_json,
+      doc_score,
+      doc_grade,
+      doc_missing_fields,
+      doc_ai_rating,
+      doc_ai_rated_at
+    FROM issues
+  `).all() as {
+        key: string;
+        raw_json: string;
+        doc_score: number | null;
+        doc_grade: string | null;
+        doc_missing_fields: string | null;
+        doc_ai_rating: string | null;
+        doc_ai_rated_at: string | null;
+    }[];
+
+    return rows.map((row) => {
+        const issue = JSON.parse(row.raw_json) as JiraIssue;
+        const computed = scoreTicket(issue);
+        const score = typeof row.doc_score === 'number' && Number.isFinite(row.doc_score)
+            ? row.doc_score
+            : computed.score;
+        const grade = normalizeDocGrade(row.doc_grade) || computed.grade;
+        const missingFields = parseStringArray(row.doc_missing_fields) || computed.missingFields;
+        return {
+            key: row.key,
+            score,
+            grade,
+            missingFields,
+            aiRatable: score >= 60,
+            aiRating: parseDocAiRating(row.doc_ai_rating),
+            aiRatedAt: row.doc_ai_rated_at,
+        };
+    }).sort((a, b) => b.score - a.score || a.key.localeCompare(b.key));
+}
+
+export function refreshAllDocScores(): { updated: number } {
+    const db = getDb();
+    const rows = db.prepare(`
+    SELECT key, raw_json
+    FROM issues
+  `).all() as { key: string; raw_json: string }[];
+
+    const update = db.prepare(`
+    UPDATE issues
+    SET doc_score = ?, doc_grade = ?, doc_missing_fields = ?
+    WHERE key = ?
+  `);
+
+    const transaction = db.transaction((entries: { key: string; raw_json: string }[]) => {
+        for (const entry of entries) {
+            const issue = JSON.parse(entry.raw_json) as JiraIssue;
+            const readiness = scoreTicket(issue);
+            update.run(
+                readiness.score,
+                readiness.grade,
+                JSON.stringify(readiness.missingFields),
+                entry.key
+            );
+        }
+    });
+
+    transaction(rows);
+    return { updated: rows.length };
+}
+
+export function saveIssueDocAiRating(key: string, rating: DocAIRating): boolean {
+    const db = getDb();
+    const result = db.prepare(`
+    UPDATE issues
+    SET doc_ai_rating = ?, doc_ai_rated_at = ?
+    WHERE key = ?
+  `).run(
+        JSON.stringify(rating),
+        new Date().toISOString(),
+        key
+    );
+    return result.changes > 0;
 }
 
 export { CLOSED_STATUSES };

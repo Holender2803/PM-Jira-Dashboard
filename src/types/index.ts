@@ -24,6 +24,23 @@ export type IssueType =
     | 'Technical Task' | 'Spike' | 'Developer Request' | 'Support' | 'Chore';
 
 export type Priority = 'Highest' | 'High' | 'Medium' | 'Low' | 'Lowest';
+export type DocGrade = 'A' | 'B' | 'C' | 'D';
+
+export interface DocScore {
+    score: number;
+    grade: DocGrade;
+    color: string;
+    missingFields: string[];
+    aiRatable: boolean;
+}
+
+export interface DocAIRating {
+    clarity: number;
+    completeness: number;
+    userImpact: number;
+    overallScore: number;
+    oneLineFeedback: string;
+}
 
 export interface JiraUser {
     accountId: string;
@@ -81,6 +98,10 @@ export interface JiraIssue {
     workType: string | null;
     squad: string | null;
     url: string;
+    docScore?: number | null;
+    docGrade?: DocGrade | null;
+    docMissingFields?: string[];
+    docAiRating?: DocAIRating | null;
     // Computed
     age: number; // days since created
     cycleTime: number | null; // days from In Progress to Done
@@ -173,7 +194,7 @@ export interface WorkflowFunnelStage {
 export type AIReportType =
     | 'sprint_summary' | 'stakeholder_update' | 'executive_summary'
     | 'pm_weekly' | 'release_notes' | 'blockers_summary' | 'selected_tickets'
-    | 'morning_briefing' | 'slide_speaker_notes';
+    | 'morning_briefing' | 'slide_speaker_notes' | 'sync_briefing';
 
 export type AIReportTone =
     | 'executive' | 'pm_internal' | 'engineering' | 'slack' | 'polished';

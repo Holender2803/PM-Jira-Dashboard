@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AIReportResponse, AIReportTone, AIReportType } from '@/types';
 import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import FilterBar from '@/components/filters/FilterBar';
@@ -23,8 +23,82 @@ const REPORT_TONES: { value: AIReportTone; label: string }[] = [
     { value: 'polished', label: 'Polished Status Report' },
 ];
 
+type CopyState = 'idle' | 'copied' | 'failed';
+
+interface LatestSyncBriefingResponse {
+    report: AIReportResponse | null;
+    syncedAt: string | null;
+    hasUnread: boolean;
+}
+
+interface SyncBriefingSections {
+    dev: string[];
+    stakeholder: string[];
+}
+
+function normalizeBullet(line: string): string {
+    const stripped = line.replace(/^[\-•*]\s*/, '').trim();
+    if (!stripped) return '';
+    return `• ${stripped}`;
+}
+
+function toBulletLines(block: string): string[] {
+    return block
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .map(normalizeBullet)
+        .filter(Boolean);
+}
+
+function parseSyncBriefingSections(content: string): SyncBriefingSections {
+    if (!content.trim()) {
+        return { dev: [], stakeholder: [] };
+    }
+
+    const blocks = content
+        .split(/\n\s*\n/)
+        .map((block) => block.trim())
+        .filter(Boolean);
+
+    if (blocks.length >= 2) {
+        const dev = toBulletLines(blocks[0]);
+        const stakeholder = toBulletLines(blocks.slice(1).join('\n\n'));
+        if (dev.length > 0 || stakeholder.length > 0) {
+            return { dev, stakeholder };
+        }
+    }
+
+    const allBullets = toBulletLines(content);
+    if (allBullets.length === 0) {
+        return { dev: [], stakeholder: [] };
+    }
+
+    if (allBullets.length <= 3) {
+        return { dev: allBullets, stakeholder: [] };
+    }
+
+    const stakeholderCount = allBullets.length >= 6 ? 3 : 2;
+    return {
+        dev: allBullets.slice(0, Math.max(1, allBullets.length - stakeholderCount)),
+        stakeholder: allBullets.slice(Math.max(1, allBullets.length - stakeholderCount)),
+    };
+}
+
+function formatSyncTimestamp(syncAt: string | null, generatedAt: string | null): string {
+    const source = syncAt || generatedAt;
+    if (!source) return 'Generated after sync recently';
+
+    const date = new Date(source);
+    if (Number.isNaN(date.getTime())) {
+        return 'Generated after sync recently';
+    }
+
+    return `Generated after sync at ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+}
+
 export default function AIReportsPage() {
-    const { selectedKeys, addAIReport, aiReports } = useAppStore();
+    const { selectedKeys, addAIReport, aiReports, setHasUnreadSyncBriefing } = useAppStore();
     const filtered = useFilteredIssues();
 
     const [type, setType] = useState<AIReportType>('selected_tickets');
@@ -34,7 +108,15 @@ export default function AIReportsPage() {
     const [error, setError] = useState<string | null>(null);
     const [history, setHistory] = useState<AIReportResponse[]>([]);
     const [activeReport, setActiveReport] = useState<AIReportResponse | null>(null);
-    const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const [copyState, setCopyState] = useState<CopyState>('idle');
+
+    const [latestSyncBriefing, setLatestSyncBriefing] = useState<AIReportResponse | null>(null);
+    const [latestSyncAt, setLatestSyncAt] = useState<string | null>(null);
+    const [syncBriefingLoading, setSyncBriefingLoading] = useState(false);
+    const [syncBriefingError, setSyncBriefingError] = useState<string | null>(null);
+    const [syncRegenerating, setSyncRegenerating] = useState(false);
+    const [devCopyState, setDevCopyState] = useState<CopyState>('idle');
+    const [stakeholderCopyState, setStakeholderCopyState] = useState<CopyState>('idle');
 
     const selectedIssues = useMemo(
         () => filtered.filter((issue) => selectedKeys.has(issue.key)),
@@ -47,6 +129,37 @@ export default function AIReportsPage() {
         }
         return [...map.values()].sort((a, b) => b.generatedAt.localeCompare(a.generatedAt));
     }, [aiReports, history]);
+
+    const syncSections = useMemo(
+        () => parseSyncBriefingSections(latestSyncBriefing?.content || ''),
+        [latestSyncBriefing]
+    );
+
+    const loadLatestSyncBriefing = useCallback(async (markRead = false) => {
+        setSyncBriefingLoading(true);
+        setSyncBriefingError(null);
+
+        try {
+            const params = new URLSearchParams({ syncBriefing: 'latest' });
+            if (markRead) params.set('markRead', 'true');
+
+            const response = await fetch(`/api/ai/report?${params.toString()}`, {
+                cache: 'no-store',
+            });
+            if (!response.ok) {
+                throw new Error('Failed to load latest sync briefing.');
+            }
+
+            const payload = await response.json() as LatestSyncBriefingResponse;
+            setLatestSyncBriefing(payload.report || null);
+            setLatestSyncAt(payload.syncedAt || null);
+            setHasUnreadSyncBriefing(Boolean(payload.hasUnread));
+        } catch (err) {
+            setSyncBriefingError(String(err));
+        } finally {
+            setSyncBriefingLoading(false);
+        }
+    }, [setHasUnreadSyncBriefing]);
 
     useEffect(() => {
         const loadHistory = async () => {
@@ -61,7 +174,8 @@ export default function AIReportsPage() {
         };
 
         loadHistory();
-    }, []);
+        void loadLatestSyncBriefing(true);
+    }, [loadLatestSyncBriefing]);
 
     const generateReport = async () => {
         setError(null);
@@ -98,6 +212,38 @@ export default function AIReportsPage() {
         }
     };
 
+    const regenerateSyncBriefing = async () => {
+        setSyncRegenerating(true);
+        setSyncBriefingError(null);
+
+        try {
+            const response = await fetch('/api/ai/report', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    type: 'sync_briefing',
+                    tone: 'pm_internal',
+                    issueKeys: [],
+                }),
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || 'Failed to regenerate sync briefing.');
+            }
+
+            addAIReport(data);
+            setHistory((current) => [data, ...current]);
+            setLatestSyncBriefing(data);
+            setHasUnreadSyncBriefing(false);
+            await loadLatestSyncBriefing(true);
+        } catch (err) {
+            setSyncBriefingError(String(err));
+        } finally {
+            setSyncRegenerating(false);
+        }
+    };
+
     const copyReport = async () => {
         if (!activeReport) return;
         try {
@@ -108,6 +254,22 @@ export default function AIReportsPage() {
         } catch {
             setCopyState('failed');
             setTimeout(() => setCopyState('idle'), 2000);
+        }
+    };
+
+    const copySyncSection = async (section: 'dev' | 'stakeholder') => {
+        const lines = section === 'dev' ? syncSections.dev : syncSections.stakeholder;
+        if (lines.length === 0) return;
+
+        const setState = section === 'dev' ? setDevCopyState : setStakeholderCopyState;
+
+        try {
+            await navigator.clipboard.writeText(lines.join('\n'));
+            setState('copied');
+            setTimeout(() => setState('idle'), 2000);
+        } catch {
+            setState('failed');
+            setTimeout(() => setState('idle'), 2000);
         }
     };
 
@@ -125,6 +287,91 @@ export default function AIReportsPage() {
             <FilterBar />
 
             <div style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
+                <div className="card">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                        <div className="chart-title" style={{ marginBottom: 0 }}>🔄 Latest Sync Briefing</div>
+                        <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={regenerateSyncBriefing}
+                            disabled={syncRegenerating || syncBriefingLoading}
+                        >
+                            {syncRegenerating ? 'Regenerating…' : 'Regenerate'}
+                        </button>
+                    </div>
+
+                    {syncBriefingLoading ? (
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading latest sync briefing…</div>
+                    ) : latestSyncBriefing ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                {formatSyncTimestamp(latestSyncAt, latestSyncBriefing.generatedAt)}
+                            </div>
+
+                            <div className="dashboard-grid grid-2" style={{ gap: 14 }}>
+                                <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>👨‍💻 For Dev Standup</div>
+                                        <button
+                                            className="btn btn-ghost btn-sm"
+                                            onClick={() => void copySyncSection('dev')}
+                                            disabled={syncSections.dev.length === 0}
+                                        >
+                                            {devCopyState === 'copied' ? 'Copied' : devCopyState === 'failed' ? 'Copy failed' : 'Copy Dev Notes'}
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                        {syncSections.dev.length > 0 ? syncSections.dev.map((line, index) => (
+                                            <div key={`dev-${index}`} style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                                                {line}
+                                            </div>
+                                        )) : (
+                                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                                No dev standup notes were generated yet.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                                        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>📢 For Stakeholders</div>
+                                        <button
+                                            className="btn btn-ghost btn-sm"
+                                            onClick={() => void copySyncSection('stakeholder')}
+                                            disabled={syncSections.stakeholder.length === 0}
+                                        >
+                                            {stakeholderCopyState === 'copied' ? 'Copied' : stakeholderCopyState === 'failed' ? 'Copy failed' : 'Copy Stakeholder Notes'}
+                                        </button>
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                        {syncSections.stakeholder.length > 0 ? syncSections.stakeholder.map((line, index) => (
+                                            <div key={`stakeholder-${index}`} style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                                                {line}
+                                            </div>
+                                        )) : (
+                                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                                No stakeholder notes were generated yet.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    ) : (
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                            {latestSyncAt
+                                ? 'A sync completed, but no automatic briefing is available yet. Click Regenerate to create one.'
+                                : 'Sync your Jira data to generate an automatic briefing.'}
+                        </div>
+                    )}
+
+                    {syncBriefingError && (
+                        <div style={{ marginTop: 10, color: 'var(--danger)', fontSize: 12 }}>
+                            {syncBriefingError}
+                        </div>
+                    )}
+                </div>
+
                 <div className="dashboard-grid grid-2">
                     <div className="card">
                         <div className="chart-title" style={{ marginBottom: 10 }}>Generate New Report</div>

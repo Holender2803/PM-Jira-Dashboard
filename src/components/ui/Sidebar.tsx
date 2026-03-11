@@ -4,7 +4,7 @@ import { useAppStore } from '@/store/app-store';
 import {
     LayoutDashboard, Zap, PieChart, GitBranch, Bug,
     Clock, Ticket, Sparkles, Settings, Bookmark,
-    RefreshCw, ChevronLeft, ChevronRight, Database, CircleHelp, Layers, BarChart3
+    RefreshCw, ChevronLeft, ChevronRight, Database, CircleHelp, Layers, BarChart3, FileText
 } from 'lucide-react';
 import { CSSProperties, useState } from 'react';
 import { formatTimeForDisplay } from '@/lib/time';
@@ -20,6 +20,7 @@ const NAV_ITEMS = [
     { href: '/epics', label: 'Epics', icon: Layers },
     { href: '/tickets', label: 'Tickets', icon: Database },
     { href: '/ai-reports', label: 'AI Reports', icon: Sparkles },
+    { href: '/docs', label: '📝 Ticket Docs', icon: FileText },
     { href: '/slideshow', label: '📊 Slideshow', icon: BarChart3 },
     { href: '/info', label: 'Info', icon: CircleHelp },
 ];
@@ -42,6 +43,7 @@ export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
         applyView,
         isPmGuideEnabled,
         togglePmGuide,
+        hasUnreadSyncBriefing,
     } = useAppStore();
     const [showViews, setShowViews] = useState(false);
     const pmGuideTitle = isPmGuideEnabled ? 'PM Guide ON' : 'PM Guide OFF';
@@ -96,6 +98,7 @@ export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
                 </div>
                 {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
                     const isActive = href === '/' ? pathname === '/' : pathname.startsWith(href);
+                    const showUnreadSyncBriefing = href === '/ai-reports' && hasUnreadSyncBriefing;
                     return (
                         <a
                             key={href}
@@ -106,6 +109,21 @@ export default function Sidebar({ onRefresh, syncing }: SidebarProps) {
                             onClick={(e) => { e.preventDefault(); router.push(href); }}
                         >
                             <Icon size={16} className="nav-icon" />
+                            {showUnreadSyncBriefing && (
+                                <span
+                                    style={{
+                                        width: 8,
+                                        height: 8,
+                                        borderRadius: '50%',
+                                        background: '#f59e0b',
+                                        boxShadow: '0 0 0 2px rgba(245,158,11,0.2)',
+                                        marginLeft: sidebarOpen ? 6 : -2,
+                                        flexShrink: 0,
+                                    }}
+                                    aria-label="New sync briefing available"
+                                    title="New sync briefing available"
+                                />
+                            )}
                             {sidebarOpen && <span className="nav-label">{label}</span>}
                         </a>
                     );

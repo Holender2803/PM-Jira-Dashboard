@@ -6,6 +6,7 @@ import { StatusBadge, PriorityBadge, IssueTypeBadge, Avatar } from '@/components
 import { ExternalLink, ChevronUp, ChevronDown } from 'lucide-react';
 import IssueDrawer from './IssueDrawer';
 import { formatEpicLabel, isEpicIssue } from '@/lib/issue-format';
+import { getDocGradeColor, getTicketDocScore } from '@/lib/docReadiness';
 
 type SortKey =
     | 'key'
@@ -18,7 +19,8 @@ type SortKey =
     | 'updated'
     | 'storyPoints'
     | 'dueDate'
-    | 'resolution';
+    | 'resolution'
+    | 'docScore';
 
 interface IssueTableProps {
     issues: JiraIssue[];
@@ -28,6 +30,8 @@ interface IssueTableProps {
     showStoryPoints?: boolean;
     showDueDate?: boolean;
     showResolution?: boolean;
+    showDocScore?: boolean;
+    onDocumentIssue?: (issue: JiraIssue) => void;
 }
 
 export default function IssueTable({
@@ -38,6 +42,8 @@ export default function IssueTable({
     showStoryPoints,
     showDueDate = false,
     showResolution = false,
+    showDocScore = false,
+    onDocumentIssue,
 }: IssueTableProps) {
     const { selectedKeys, toggleSelected } = useAppStore();
     const [sortKey, setSortKey] = useState<SortKey>('updated');
@@ -67,6 +73,9 @@ export default function IssueTable({
         } else if (sortKey === 'resolution') {
             va = a.resolution || '';
             vb = b.resolution || '';
+        } else if (sortKey === 'docScore') {
+            va = getTicketDocScore(a).score;
+            vb = getTicketDocScore(b).score;
         }
         const cmp = va < vb ? -1 : va > vb ? 1 : 0;
         return sortAsc ? cmp : -cmp;
@@ -108,6 +117,11 @@ export default function IssueTable({
                             <th onClick={() => handleSort('assignee')} style={thStyle}>
                                 ASSIGNEE {renderSortIcon('assignee')}
                             </th>
+                            {showDocScore && (
+                                <th onClick={() => handleSort('docScore')} style={thStyle}>
+                                    📋 DOC {renderSortIcon('docScore')}
+                                </th>
+                            )}
                             {displayStoryPoints && (
                                 <th onClick={() => handleSort('storyPoints')} style={thStyle}>
                                     STORY POINTS {renderSortIcon('storyPoints')}
@@ -126,6 +140,7 @@ export default function IssueTable({
                             <th onClick={() => handleSort('age')} style={thStyle}>
                                 AGE {renderSortIcon('age')}
                             </th>
+                            {onDocumentIssue && <th style={{ width: 124 }}></th>}
                             <th style={{ width: 60 }}></th>
                         </tr>
                     </thead>
@@ -195,6 +210,44 @@ export default function IssueTable({
                                         <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>
                                     )}
                                 </td>
+                                {showDocScore && (
+                                    <td onClick={() => setDrawerIssue(issue)}>
+                                        {(() => {
+                                            const readiness = getTicketDocScore(issue);
+                                            const color = getDocGradeColor(readiness.grade);
+                                            const stars = issue.docAiRating
+                                                ? `${'★'.repeat(Math.max(0, Math.min(5, Math.round(issue.docAiRating.overallScore))))}${'☆'.repeat(Math.max(0, 5 - Math.round(issue.docAiRating.overallScore)))}`
+                                                : null;
+                                            return (
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                    <span
+                                                        style={{
+                                                            fontSize: 11,
+                                                            fontWeight: 700,
+                                                            borderRadius: 999,
+                                                            padding: '2px 8px',
+                                                            border: `1px solid ${color}80`,
+                                                            background: `${color}24`,
+                                                            color,
+                                                            whiteSpace: 'nowrap',
+                                                        }}
+                                                        title={`Doc Readiness ${readiness.score}/100`}
+                                                    >
+                                                        [{readiness.grade}]
+                                                    </span>
+                                                    {stars && (
+                                                        <span
+                                                            style={{ fontSize: 11, color: '#fbbf24' }}
+                                                            title={issue.docAiRating?.oneLineFeedback || 'AI rating'}
+                                                        >
+                                                            {stars}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+                                    </td>
+                                )}
                                 {displayStoryPoints && (
                                     <td onClick={() => setDrawerIssue(issue)} style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
                                         {issue.storyPoints ?? '—'}
@@ -227,6 +280,22 @@ export default function IssueTable({
                                         {issue.age}d
                                     </span>
                                 </td>
+                                {onDocumentIssue && (
+                                    <td style={{ textAlign: 'right' }}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-ghost btn-sm row-hover-action"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                onDocumentIssue(issue);
+                                            }}
+                                            title="Generate documentation for this ticket"
+                                            style={{ whiteSpace: 'nowrap' }}
+                                        >
+                                            📝 Document
+                                        </button>
+                                    </td>
+                                )}
                                 <td>
                                     <a
                                         href={issue.url}

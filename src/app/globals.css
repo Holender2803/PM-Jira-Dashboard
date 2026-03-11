@@ -219,6 +219,18 @@ tr:last-child td { border-bottom: none; }
 tbody tr:hover td { background: var(--bg-hover); }
 tbody tr { transition: background 0.1s; }
 
+.row-hover-action {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+tbody tr:hover .row-hover-action,
+tbody tr:focus-within .row-hover-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* ─── Sidebar Layout ────────────────────────────────────────────────────────── */
 .layout {
   display: flex;
