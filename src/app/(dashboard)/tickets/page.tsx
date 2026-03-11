@@ -8,6 +8,7 @@ import IssueDrawer from '@/components/tables/IssueDrawer';
 import SLAHeatRow from '@/components/SLAHeatRow';
 import { extractDescriptionText, formatEpicLabel } from '@/lib/issue-format';
 import { getSLAAssigneeBreach, getSLAStatus, getSLATrend } from '@/lib/analytics';
+import { getTicketDocScore } from '@/lib/docReadiness';
 import { JiraIssue } from '@/types';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import {
@@ -50,6 +51,7 @@ export default function TicketsPage() {
     const [slaSortKey, setSlaSortKey] = useState<SLASortKey>('dueDate');
     const [slaSortAsc, setSlaSortAsc] = useState(true);
     const [slaDrawerIssue, setSlaDrawerIssue] = useState<JiraIssue | null>(null);
+    const [showDocScore, setShowDocScore] = useState(true);
 
     const visibleIssues = useMemo(() => {
         const term = search.trim().toLowerCase();
@@ -111,6 +113,26 @@ export default function TicketsPage() {
         return sorted;
     }, [slaSortAsc, slaSortKey, slaStatus.atRisk]);
 
+    const docHealth = useMemo(() => {
+        const counts = { A: 0, B: 0, C: 0, D: 0 };
+
+        for (const issue of filtered) {
+            const grade = getTicketDocScore(issue).grade;
+            counts[grade] += 1;
+        }
+
+        const total = filtered.length;
+        const ready = counts.A + counts.B;
+        const readyPercent = total > 0 ? Math.round((ready / total) * 100) : 0;
+
+        return {
+            total,
+            ready,
+            readyPercent,
+            counts,
+        };
+    }, [filtered]);
+
     const handleSlaSort = (key: SLASortKey) => {
         if (slaSortKey === key) {
             setSlaSortAsc((current) => !current);
@@ -118,6 +140,19 @@ export default function TicketsPage() {
         }
         setSlaSortKey(key);
         setSlaSortAsc(true);
+    };
+
+    const openDocsForIssue = (issue: JiraIssue) => {
+        const grade = getTicketDocScore(issue).grade;
+        const params = new URLSearchParams({
+            ticket: issue.key,
+            sort: 'doc_desc',
+            docFilter: grade === 'D' ? 'all' : 'ready',
+        });
+        if (grade === 'D') {
+            params.set('mode', 'qa');
+        }
+        router.push(`/docs?${params.toString()}`);
     };
 
     const exportCsv = () => {
@@ -251,17 +286,73 @@ export default function TicketsPage() {
             <FilterBar />
 
             <div style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <div className="card" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <input
-                        className="input"
-                        placeholder="Search key, summary, description, assignee, labels..."
-                        value={search}
-                        onChange={(event) => setSearch(event.target.value)}
-                        style={{ maxWidth: 420 }}
-                    />
-                    <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                        {visibleIssues.length} matching tickets
-                    </span>
+                <div className="card" style={{ display: 'flex', gap: 16, alignItems: 'stretch', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 420px' }}>
+                        <input
+                            className="input"
+                            placeholder="Search key, summary, description, assignee, labels..."
+                            value={search}
+                            onChange={(event) => setSearch(event.target.value)}
+                            style={{ maxWidth: 420 }}
+                        />
+                        <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            {visibleIssues.length} matching tickets
+                        </span>
+                        <div
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                border: '1px solid var(--border)',
+                                borderRadius: 8,
+                                padding: '6px 10px',
+                                background: 'var(--bg-elevated)',
+                            }}
+                        >
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                                Columns
+                            </span>
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <input
+                                    type="checkbox"
+                                    checked={showDocScore}
+                                    onChange={(event) => setShowDocScore(event.target.checked)}
+                                    style={{ accentColor: 'var(--accent)' }}
+                                />
+                                Show Doc Score
+                            </label>
+                        </div>
+                    </div>
+
+                    <button
+                        type="button"
+                        onClick={() => router.push('/docs?docFilter=all&sort=doc_desc')}
+                        className="btn btn-ghost"
+                        style={{
+                            flex: '0 1 330px',
+                            alignItems: 'flex-start',
+                            justifyContent: 'flex-start',
+                            textAlign: 'left',
+                            border: '1px solid var(--border)',
+                            background: 'var(--bg-elevated)',
+                            padding: '12px 14px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 6,
+                        }}
+                        title="Open Ticket Docs sorted by Doc Readiness"
+                    >
+                        <span style={{ fontSize: 13, color: 'var(--text-primary)', fontWeight: 700 }}>
+                            📋 Documentation Health
+                        </span>
+                        <span style={{ fontSize: 22, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1 }}>
+                            {docHealth.readyPercent}% of tickets are doc-ready (A or B grade)
+                        </span>
+                        <span style={{ fontSize: 11, color: '#86efac' }}>🟢 A grade: {docHealth.counts.A} tickets</span>
+                        <span style={{ fontSize: 11, color: '#93c5fd' }}>🔵 B grade: {docHealth.counts.B} tickets</span>
+                        <span style={{ fontSize: 11, color: '#fcd34d' }}>🟡 C grade: {docHealth.counts.C} tickets</span>
+                        <span style={{ fontSize: 11, color: '#fca5a5' }}>🔴 D grade: {docHealth.counts.D} tickets</span>
+                    </button>
                 </div>
 
                 <div className="dashboard-grid grid-2">
@@ -468,7 +559,11 @@ export default function TicketsPage() {
                     </div>
                 </div>
 
-                <IssueTable issues={visibleIssues} />
+                <IssueTable
+                    issues={visibleIssues}
+                    showDocScore={showDocScore}
+                    onDocumentIssue={openDocsForIssue}
+                />
             </div>
 
             {slaDrawerIssue && (

@@ -31,6 +31,8 @@ interface AppState {
     workflowGroupFilter: WorkflowGroup[];
     activeSprints: Sprint[];
     selectedKeys: Set<string>;
+    selectedDocTickets: string[];
+    selectedDocAudiences: string[];
 
     // UI
     sidebarOpen: boolean;
@@ -41,6 +43,7 @@ interface AppState {
 
     // AI Reports
     aiReports: AIReportResponse[];
+    hasUnreadSyncBriefing: boolean;
 
     // Saved Views
     savedViews: SavedView[];
@@ -52,6 +55,11 @@ interface AppState {
     setWorkflowGroupFilter: (groups: WorkflowGroup[]) => void;
     resetFilters: () => void;
     setSelectedKeys: (keys: Set<string>) => void;
+    setSelectedDocTickets: (keys: string[]) => void;
+    setSelectedDocAudiences: (audiences: string[]) => void;
+    toggleDocTicket: (key: string) => void;
+    toggleDocAudience: (audience: string) => void;
+    clearDocTicketSelection: () => void;
     toggleSelected: (key: string) => void;
     clearSelection: () => void;
     setSidebarOpen: (v: boolean) => void;
@@ -67,6 +75,7 @@ interface AppState {
     setLastSynced: (t: string | null) => void;
     setTotalIssues: (n: number) => void;
     setDemoMode: (v: boolean) => void;
+    setHasUnreadSyncBriefing: (v: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -79,12 +88,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     workflowGroupFilter: DEFAULT_WORKFLOW_GROUP_FILTER,
     activeSprints: [],
     selectedKeys: new Set(),
+    selectedDocTickets: [],
+    selectedDocAudiences: [],
     sidebarOpen: true,
     sidebarHidden: false,
     theme: 'dark',
     storyPointsWarningDismissed: false,
     isPmGuideEnabled: false,
     aiReports: [],
+    hasUnreadSyncBriefing: false,
     savedViews: [],
 
     setIssues: (issues) => set({ issues: enrichIssuesWithEpicSummaries(issues) }),
@@ -121,6 +133,33 @@ export const useAppStore = create<AppState>((set, get) => ({
             workflowGroupFilter: DEFAULT_WORKFLOW_GROUP_FILTER,
         }),
     setSelectedKeys: (selectedKeys) => set({ selectedKeys }),
+    setSelectedDocTickets: (selectedDocTickets) =>
+        set({ selectedDocTickets: [...new Set(selectedDocTickets)] }),
+    setSelectedDocAudiences: (selectedDocAudiences) =>
+        set({ selectedDocAudiences: [...new Set(selectedDocAudiences)] }),
+    toggleDocTicket: (key) =>
+        set((state) => {
+            if (state.selectedDocTickets.includes(key)) {
+                return {
+                    selectedDocTickets: state.selectedDocTickets.filter((ticketKey) => ticketKey !== key),
+                };
+            }
+            return {
+                selectedDocTickets: [...state.selectedDocTickets, key],
+            };
+        }),
+    toggleDocAudience: (audience) =>
+        set((state) => {
+            if (state.selectedDocAudiences.includes(audience)) {
+                return {
+                    selectedDocAudiences: state.selectedDocAudiences.filter((item) => item !== audience),
+                };
+            }
+            return {
+                selectedDocAudiences: [...state.selectedDocAudiences, audience],
+            };
+        }),
+    clearDocTicketSelection: () => set({ selectedDocTickets: [] }),
     toggleSelected: (key) => {
         const keys = new Set(get().selectedKeys);
         if (keys.has(key)) keys.delete(key);
@@ -151,6 +190,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     setLastSynced: (lastSynced) => set({ lastSynced }),
     setTotalIssues: (totalIssues) => set({ totalIssues }),
     setDemoMode: (demoMode) => set({ demoMode }),
+    setHasUnreadSyncBriefing: (hasUnreadSyncBriefing) => set({ hasUnreadSyncBriefing }),
 }));
 
 // ─── Derived selectors ─────────────────────────────────────────────────────────

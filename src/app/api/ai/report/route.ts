@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import OpenAI from 'openai';
+import getDb from '@/lib/db';
 import { AIReportRequest, JiraIssue } from '@/types';
 import { getDemoIssues } from '@/lib/demo-data';
 import { queryIssues } from '@/lib/issue-store';
 import { extractDescriptionText, formatEpicLabel } from '@/lib/issue-format';
+import { APP_CONFIG_KEYS, getAppConfigBoolean, setAppConfigBoolean } from '@/lib/app-config';
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 
@@ -35,11 +37,46 @@ If days remaining is 0 or unavailable, say "sprint end date
 not configured" instead of "0 days remaining".
 NEVER use numbered lists, headers, or section titles.
 Output the 3 sentences and nothing else.`,
+    sync_briefing: `You are a PM assistant.
+A Jira sync just completed. Write two short sections.
+
+SECTION 1 — FOR YOUR STANDUP WITH DEVS (3-4 bullets):
+What just changed that the dev team needs to know.
+Be specific and technical. Use ticket keys.
+Format each bullet as: "• KEY — what changed and why it matters"
+
+SECTION 2 — FOR STAKEHOLDER UPDATE (2-3 bullets):
+Same changes, translated to business language.
+No ticket keys. Focus on impact, not implementation.
+Format: "• What this means for the product/users"
+
+Keep total response under 200 words.
+No headers, no numbered lists, no markdown formatting.`,
+    ticket_documentation: `Generate internal documentation for this ticket. Output ONLY valid JSON, no other text:
+{
+  "summary": "One sentence. What this ticket accomplished.",
+  "shortDescription": "2-3 sentences. What changed and why it matters to users or the business. No technical jargon.",
+  "howToUse": "Step by step if applicable. If it's a bug fix, describe what behavior changed. If feature, how to access it.",
+  "impact": "Who benefits and how.",
+  "audience_notes": {
+    "implementation": "...",
+    "support": "...",
+    "sales": "...",
+    "marketing": "...",
+    "engineering": "...",
+    "executive": "...",
+    "product": "..."
+  }
+}
+Only include keys for requested audiences in audience_notes.
+If information is not available, use null for that field.`,
 };
 
 const MAX_TOKENS: Record<string, number> = {
     morning_briefing: 150,
     slide_speaker_notes: 100,
+    sync_briefing: 250,
+    ticket_documentation: 600,
 };
 
 const TONE_INSTRUCTIONS: Record<string, string> = {
@@ -77,6 +114,32 @@ interface AIClientConfig {
     model: string;
 }
 
+interface SyncStatusChange {
+    key: string;
+    from: string;
+    to: string;
+}
+
+interface SyncDiffPayload {
+    syncedAt: string;
+    sprintName: string | null;
+    newlyBlocked: string[];
+    newlyResolved: string[];
+    statusChanges: SyncStatusChange[];
+    newTickets: string[];
+    removedFromSprint: string[];
+}
+
+interface StoredReportRow {
+    id: string;
+    type: string;
+    tone: string;
+    generated_at: string;
+    summary: string;
+    content: string;
+    issue_keys: string;
+}
+
 function resolveAIClientConfig(): AIClientConfig | null {
     const explicitProvider = (process.env.AI_PROVIDER || '').toLowerCase();
     const openAIKey = process.env.OPENAI_API_KEY || '';
@@ -107,39 +170,230 @@ function resolveAIClientConfig(): AIClientConfig | null {
     };
 }
 
+function parseStringArray(raw: string | null | undefined): string[] {
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((value): value is string => typeof value === 'string');
+    } catch {
+        return [];
+    }
+}
+
+function parseStatusChanges(raw: string | null | undefined): SyncStatusChange[] {
+    if (!raw) return [];
+    try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) return [];
+        return parsed
+            .filter((value): value is { key?: unknown; from?: unknown; to?: unknown } => typeof value === 'object' && value !== null)
+            .map((value) => ({
+                key: typeof value.key === 'string' ? value.key : 'UNKNOWN',
+                from: typeof value.from === 'string' ? value.from : 'Unknown',
+                to: typeof value.to === 'string' ? value.to : 'Unknown',
+            }));
+    } catch {
+        return [];
+    }
+}
+
+function getLatestSyncDiff(): SyncDiffPayload | null {
+    const db = getDb();
+    const row = db.prepare(`
+      SELECT
+        synced_at,
+        sprint_name,
+        newly_blocked,
+        newly_resolved,
+        status_changes,
+        new_tickets,
+        removed_from_sprint
+      FROM sync_diffs
+      ORDER BY synced_at DESC
+      LIMIT 1
+    `).get() as {
+        synced_at: string;
+        sprint_name: string | null;
+        newly_blocked: string;
+        newly_resolved: string;
+        status_changes: string;
+        new_tickets: string;
+        removed_from_sprint: string | null;
+    } | undefined;
+
+    if (!row) return null;
+
+    return {
+        syncedAt: row.synced_at,
+        sprintName: row.sprint_name,
+        newlyBlocked: parseStringArray(row.newly_blocked),
+        newlyResolved: parseStringArray(row.newly_resolved),
+        statusChanges: parseStatusChanges(row.status_changes),
+        newTickets: parseStringArray(row.new_tickets),
+        removedFromSprint: parseStringArray(row.removed_from_sprint || '[]'),
+    };
+}
+
+function buildSyncDiffSummary(diff: SyncDiffPayload): string {
+    const formatList = (values: string[]) => (values.length > 0 ? values.join(', ') : 'None');
+    const changeLines = diff.statusChanges.length > 0
+        ? diff.statusChanges.map((change) => `${change.key}: ${change.from} -> ${change.to}`).join('\n')
+        : 'None';
+
+    return [
+        'Sync diff summary (computed fields only):',
+        `Synced at: ${diff.syncedAt}`,
+        `Sprint: ${diff.sprintName || 'No active sprint detected'}`,
+        `Newly blocked (${diff.newlyBlocked.length}): ${formatList(diff.newlyBlocked)}`,
+        `Newly resolved (${diff.newlyResolved.length}): ${formatList(diff.newlyResolved)}`,
+        `Status changes (${diff.statusChanges.length}):`,
+        changeLines,
+        `New tickets (${diff.newTickets.length}): ${formatList(diff.newTickets)}`,
+        `Removed from active sprint (${diff.removedFromSprint.length}): ${formatList(diff.removedFromSprint)}`,
+    ].join('\n');
+}
+
+function reportTypeLabel(type: string): string {
+    return type.replace(/_/g, ' ').replace(/\b\w/g, (value) => value.toUpperCase());
+}
+
+function toReportResponse(row: StoredReportRow) {
+    return {
+        id: row.id,
+        type: row.type,
+        tone: row.tone,
+        generatedAt: row.generated_at,
+        summary: row.summary,
+        content: row.content,
+        issueKeys: row.issue_keys ? parseStringArray(row.issue_keys) : [],
+    };
+}
+
+function buildSyncBriefingSummary(diff: SyncDiffPayload | null): string {
+    if (!diff) return 'Sync Briefing — automatic post-sync update';
+    const totalChanges =
+        diff.newlyBlocked.length +
+        diff.newlyResolved.length +
+        diff.statusChanges.length +
+        diff.newTickets.length +
+        diff.removedFromSprint.length;
+
+    return `Sync Briefing — ${totalChanges} tracked change${totalChanges === 1 ? '' : 's'}`;
+}
+
+function saveReportToDb(params: {
+    id: string;
+    type: string;
+    tone: string;
+    generatedAt: string;
+    summary: string;
+    content: string;
+    issueKeys: string[];
+    sprintName?: string;
+}) {
+    if (DEMO_MODE) return;
+
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO ai_reports (id, type, tone, generated_at, summary, content, issue_keys, sprint_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+        params.id,
+        params.type,
+        params.tone,
+        params.generatedAt,
+        params.summary,
+        params.content,
+        JSON.stringify(params.issueKeys),
+        params.sprintName || null
+    );
+}
+
 export async function POST(request: Request) {
     try {
-        const body: AIReportRequest = await request.json();
-        const { type, tone, issueKeys, sprintName, customInstructions } = body;
-
-        // Gather issue data
-        let issues: JiraIssue[];
-        if (DEMO_MODE) {
-            const all = getDemoIssues();
-            issues = issueKeys.length > 0
-                ? all.filter(i => issueKeys.includes(i.key))
-                : all.filter(i => i.sprint?.state === 'active');
-        } else {
-            issues = queryIssues({ selectedKeys: issueKeys.length > 0 ? issueKeys : undefined, sprint: 'current' });
-        }
-
-        // Build context for AI
-        const issueContext = issues.map(iss => `
-[${iss.key}] ${iss.summary}
-Type: ${iss.issueType} | Status: ${iss.status} | Priority: ${iss.priority || 'None'}
-Assignee: ${iss.assignee?.displayName || 'Unassigned'} | Points: ${iss.storyPoints || '?'}
-Sprint: ${iss.sprint?.name || 'No Sprint'}
-Epic: ${formatEpicLabel(iss)}
-Age: ${iss.age} days | Cycle Time: ${iss.cycleTime !== null ? iss.cycleTime + ' days' : 'N/A'}
-${iss.description ? `Description: ${extractDescriptionText(iss.description).slice(0, 300)}` : ''}
-`).join('\n---\n');
+        const body = await request.json().catch(() => ({})) as Partial<AIReportRequest>;
+        const type = typeof body.type === 'string' ? body.type : 'selected_tickets';
+        const tone = typeof body.tone === 'string' ? body.tone : 'pm_internal';
+        const sprintName = typeof body.sprintName === 'string' ? body.sprintName : undefined;
+        const customInstructions = typeof body.customInstructions === 'string'
+            ? body.customInstructions.trim()
+            : '';
+        const issueKeys = Array.isArray(body.issueKeys)
+            ? body.issueKeys.filter((key): key is string => typeof key === 'string')
+            : [];
 
         const isMorningBriefing = type === 'morning_briefing';
-        const formatGuide = isMorningBriefing ? '' : CONFLUENCE_FORMAT_GUIDE;
+        const isSyncBriefing = type === 'sync_briefing';
+
+        let syncDiff: SyncDiffPayload | null = null;
+        let syncDiffSummary = '';
+        if (isSyncBriefing) {
+            if (customInstructions) {
+                syncDiffSummary = customInstructions;
+            } else if (!DEMO_MODE) {
+                syncDiff = getLatestSyncDiff();
+                if (!syncDiff) {
+                    return NextResponse.json(
+                        { error: 'No sync data available yet. Sync your Jira data first.' },
+                        { status: 400 }
+                    );
+                }
+                syncDiffSummary = buildSyncDiffSummary(syncDiff);
+            }
+
+            if (!syncDiffSummary) {
+                syncDiffSummary = [
+                    'Sync diff summary (computed fields only):',
+                    `Synced at: ${new Date().toISOString()}`,
+                    'Sprint: Demo mode',
+                    'Newly blocked (0): None',
+                    'Newly resolved (0): None',
+                    'Status changes (0):',
+                    'None',
+                    'New tickets (0): None',
+                    'Removed from active sprint (0): None',
+                ].join('\n');
+            }
+        }
+
+        // Gather issue data for issue-based reports only.
+        let issues: JiraIssue[] = [];
+        if (!isSyncBriefing) {
+            if (DEMO_MODE) {
+                const all = getDemoIssues();
+                issues = issueKeys.length > 0
+                    ? all.filter((issue) => issueKeys.includes(issue.key))
+                    : all.filter((issue) => issue.sprint?.state === 'active');
+            } else {
+                issues = queryIssues({
+                    selectedKeys: issueKeys.length > 0 ? issueKeys : undefined,
+                    sprint: 'current',
+                });
+            }
+        }
+
+        // Build context for AI.
+        const issueContext = isSyncBriefing
+            ? ''
+            : issues.map((issue) => `
+[${issue.key}] ${issue.summary}
+Type: ${issue.issueType} | Status: ${issue.status} | Priority: ${issue.priority || 'None'}
+Assignee: ${issue.assignee?.displayName || 'Unassigned'} | Points: ${issue.storyPoints || '?'}
+Sprint: ${issue.sprint?.name || 'No Sprint'}
+Epic: ${formatEpicLabel(issue)}
+Age: ${issue.age} days | Cycle Time: ${issue.cycleTime !== null ? `${issue.cycleTime} days` : 'N/A'}
+${issue.description ? `Description: ${extractDescriptionText(issue.description).slice(0, 300)}` : ''}
+`).join('\n---\n');
+
+        const formatGuide = (isMorningBriefing || isSyncBriefing) ? '' : CONFLUENCE_FORMAT_GUIDE;
         const maxTokens = MAX_TOKENS[type] || 1500;
-        const effectiveTemperature = isMorningBriefing ? 0.3 : 0.7;
+        const effectiveTemperature = (isMorningBriefing || isSyncBriefing) ? 0.3 : 0.7;
         const criticalMorningPrefix = isMorningBriefing
             ? 'CRITICAL: Output exactly 3 sentences. Stop after the third sentence. Do not output ticket keys, lists, headers, or any text after the third sentence ends with a period.'
+            : '';
+        const additionalInstructions = (!isSyncBriefing && customInstructions)
+            ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}`
             : '';
 
         const systemPrompt = `${criticalMorningPrefix ? `${criticalMorningPrefix}\n` : ''}You are a productivity assistant specialized in helping Product Managers communicate sprint progress, delivery status, and team updates.
@@ -153,42 +407,37 @@ TONE: ${TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.pm_internal}
 TASK: ${REPORT_PROMPTS[type] || REPORT_PROMPTS.selected_tickets}
 ${formatGuide}
 
-${customInstructions ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}` : ''}`;
+${additionalInstructions}`;
 
         const userPrompt = isMorningBriefing
             ? (customInstructions || 'Write the 3-sentence morning briefing now. No lists, no headers, plain sentences only.')
-            : `Here are the Jira tickets to analyze:\n\n${issueContext}\n\nPlease generate the requested ${type.replace('_', ' ')}.`;
+            : isSyncBriefing
+                ? `Here is the computed sync diff summary:\n\n${syncDiffSummary}\n\nGenerate the sync briefing now.`
+                : `Here are the Jira tickets to analyze:\n\n${issueContext}\n\nPlease generate the requested ${type.replace('_', ' ')}.`;
 
-        // Check if AI provider is configured
+        let content: string;
+
         const aiConfig = resolveAIClientConfig();
         if (!aiConfig) {
-            // Return mock AI response for demo
-            return NextResponse.json({
-                id: `report-${Date.now()}`,
-                type,
-                tone,
-                generatedAt: new Date().toISOString(),
-                issueKeys,
-                summary: `${type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} — ${issues.length} tickets analyzed`,
-                content: generateMockReport(type, tone, issues, sprintName),
+            content = generateMockReport(type, tone, issues, sprintName, syncDiff);
+        } else {
+            const openai = new OpenAI({
+                apiKey: aiConfig.apiKey,
+                baseURL: aiConfig.baseURL,
             });
+
+            const completion = await openai.chat.completions.create({
+                model: aiConfig.model,
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ],
+                temperature: effectiveTemperature,
+                max_tokens: maxTokens,
+            });
+
+            content = completion.choices[0]?.message?.content || 'No response generated.';
         }
-
-        const openai = new OpenAI({
-            apiKey: aiConfig.apiKey,
-            baseURL: aiConfig.baseURL,
-        });
-        const completion = await openai.chat.completions.create({
-            model: aiConfig.model,
-            messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt },
-            ],
-            temperature: effectiveTemperature,
-            max_tokens: maxTokens,
-        });
-
-        const content = completion.choices[0]?.message?.content || 'No response generated.';
 
         const report = {
             id: `report-${Date.now()}`,
@@ -196,22 +445,25 @@ ${customInstructions ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}` : ''}`;
             tone,
             generatedAt: new Date().toISOString(),
             issueKeys,
-            summary: `${type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} — ${issues.length} tickets`,
+            summary: isSyncBriefing
+                ? buildSyncBriefingSummary(syncDiff)
+                : `${reportTypeLabel(type)} — ${issues.length} tickets`,
             content,
         };
 
-        // Save to DB if not demo
-        if (!DEMO_MODE) {
-            try {
-                const db = (await import('@/lib/db')).default();
-                db.prepare(`
-          INSERT INTO ai_reports (id, type, tone, generated_at, summary, content, issue_keys, sprint_name)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-                    report.id, type, tone, report.generatedAt,
-                    report.summary, content, JSON.stringify(issueKeys), sprintName || null
-                );
-            } catch { /* non-critical */ }
+        try {
+            saveReportToDb({
+                id: report.id,
+                type: report.type,
+                tone: report.tone,
+                generatedAt: report.generatedAt,
+                summary: report.summary,
+                content: report.content,
+                issueKeys: report.issueKeys,
+                sprintName,
+            });
+        } catch {
+            // Non-critical persistence failure.
         }
 
         return NextResponse.json(report);
@@ -220,48 +472,140 @@ ${customInstructions ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}` : ''}`;
     }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
     try {
+        const { searchParams } = new URL(request.url);
+        const syncBriefingMode = searchParams.get('syncBriefing');
+
+        if (syncBriefingMode === 'latest') {
+            if (DEMO_MODE) {
+                return NextResponse.json({
+                    report: null,
+                    syncedAt: null,
+                    hasUnread: false,
+                });
+            }
+
+            const markRead = searchParams.get('markRead') === 'true';
+            if (markRead) {
+                setAppConfigBoolean(APP_CONFIG_KEYS.syncBriefingUnread, false);
+            }
+
+            const db = getDb();
+            const reportRow = db.prepare(`
+              SELECT id, type, tone, generated_at, summary, content, issue_keys
+              FROM ai_reports
+              WHERE type = 'sync_briefing'
+              ORDER BY generated_at DESC
+              LIMIT 1
+            `).get() as StoredReportRow | undefined;
+
+            const syncRow = db.prepare(`
+              SELECT synced_at
+              FROM sync_diffs
+              ORDER BY synced_at DESC
+              LIMIT 1
+            `).get() as { synced_at: string | null } | undefined;
+
+            return NextResponse.json({
+                report: reportRow ? toReportResponse(reportRow) : null,
+                syncedAt: syncRow?.synced_at || null,
+                hasUnread: markRead ? false : getAppConfigBoolean(APP_CONFIG_KEYS.syncBriefingUnread),
+            });
+        }
+
         if (DEMO_MODE) {
             return NextResponse.json([]);
         }
 
-        const db = (await import('@/lib/db')).default();
+        const db = getDb();
         const rows = db.prepare(`
-      SELECT id, type, tone, generated_at, summary, content, issue_keys
-      FROM ai_reports
-      ORDER BY generated_at DESC
-      LIMIT 20
-    `).all() as {
-            id: string;
-            type: string;
-            tone: string;
-            generated_at: string;
-            summary: string;
-            content: string;
-            issue_keys: string;
-        }[];
+          SELECT id, type, tone, generated_at, summary, content, issue_keys
+          FROM ai_reports
+          ORDER BY generated_at DESC
+          LIMIT 20
+        `).all() as StoredReportRow[];
 
-        return NextResponse.json(rows.map((row) => ({
-            id: row.id,
-            type: row.type,
-            tone: row.tone,
-            generatedAt: row.generated_at,
-            summary: row.summary,
-            content: row.content,
-            issueKeys: row.issue_keys ? JSON.parse(row.issue_keys) : [],
-        })));
+        return NextResponse.json(rows.map(toReportResponse));
     } catch (error) {
         return NextResponse.json({ error: String(error) }, { status: 500 });
     }
 }
 
-function generateMockReport(type: string, tone: string, issues: JiraIssue[], sprintName?: string): string {
-    const done = issues.filter(i => i.status === 'Done').length;
-    const inProgress = issues.filter(i => i.status === 'In Progress').length;
-    const blocked = issues.filter(i => i.status === 'Blocked').length;
-    const bugs = issues.filter(i => i.issueType === 'Bug').length;
-    const sprint = sprintName || issues.find(i => i.sprint)?.sprint?.name || 'Current Sprint';
+function generateMockSyncBriefing(syncDiff: SyncDiffPayload | null): string {
+    if (!syncDiff) {
+        return [
+            '• No Jira status transitions were detected in this sync, so no immediate engineering actions are required.',
+            '• The active sprint scope is stable and there are no new blockers to triage.',
+            '• Continue executing the current plan and monitor the next sync for movement.',
+            '',
+            '• Delivery is steady with no newly surfaced execution risks.',
+            '• Current sprint commitments remain on track for users and internal milestones.',
+        ].join('\n');
+    }
+
+    const devBullets: string[] = [];
+    if (syncDiff.newlyBlocked.length > 0) {
+        devBullets.push(`• ${syncDiff.newlyBlocked.slice(0, 3).join(', ')} — moved to blocked; review dependencies and assign an owner for unblock actions.`);
+    }
+    if (syncDiff.newlyResolved.length > 0) {
+        devBullets.push(`• ${syncDiff.newlyResolved.slice(0, 3).join(', ')} — moved to done/closed; update downstream tasks and release readiness checks.`);
+    }
+    if (syncDiff.statusChanges.length > 0) {
+        const sample = syncDiff.statusChanges
+            .slice(0, 3)
+            .map((change) => `${change.key} ${change.from}→${change.to}`)
+            .join('; ');
+        devBullets.push(`• ${sample} — status flow changed and may impact handoffs across dev/QA/release.`);
+    }
+    if (syncDiff.newTickets.length > 0) {
+        devBullets.push(`• ${syncDiff.newTickets.slice(0, 3).join(', ')} — added since last sync; confirm sizing and sprint fit before pull-in.`);
+    }
+    if (syncDiff.removedFromSprint.length > 0) {
+        devBullets.push(`• ${syncDiff.removedFromSprint.slice(0, 3).join(', ')} — left active sprint; re-check scope assumptions and dependency plans.`);
+    }
+    if (devBullets.length === 0) {
+        devBullets.push('• No ticket-level status changes were detected in this sync; engineering execution remains stable.');
+    }
+
+    const stakeholderBullets: string[] = [];
+    if (syncDiff.newlyBlocked.length > 0) {
+        stakeholderBullets.push('• Some delivery items hit new constraints, which may require prioritization support to protect sprint outcomes.');
+    }
+    if (syncDiff.newlyResolved.length > 0) {
+        stakeholderBullets.push('• Multiple in-flight items reached completion, improving confidence in near-term delivery goals.');
+    }
+    if (syncDiff.newTickets.length > 0 || syncDiff.removedFromSprint.length > 0) {
+        stakeholderBullets.push('• Sprint scope shifted during execution, so timelines and expectations should be reviewed against the updated plan.');
+    }
+    if (stakeholderBullets.length === 0) {
+        stakeholderBullets.push('• No major scope or risk shifts were detected, so product delivery remains on the current trajectory.');
+        stakeholderBullets.push('• Current work continues to support planned user and business outcomes without new escalations.');
+    }
+
+    return [
+        ...devBullets.slice(0, 4),
+        '',
+        ...stakeholderBullets.slice(0, 3),
+    ].join('\n');
+}
+
+function generateMockReport(
+    type: string,
+    tone: string,
+    issues: JiraIssue[],
+    sprintName?: string,
+    syncDiff: SyncDiffPayload | null = null
+): string {
+    if (type === 'sync_briefing') {
+        return generateMockSyncBriefing(syncDiff);
+    }
+
+    const done = issues.filter((issue) => issue.status === 'Done').length;
+    const inProgress = issues.filter((issue) => issue.status === 'In Progress').length;
+    const blocked = issues.filter((issue) => issue.status === 'Blocked').length;
+    const bugs = issues.filter((issue) => issue.issueType === 'Bug').length;
+    const sprint = sprintName || issues.find((issue) => issue.sprint)?.sprint?.name || 'Current Sprint';
 
     if (tone === 'slack') {
         return `🚀 **${sprint} Update**\n\n✅ ${done} tickets shipped\n🔄 ${inProgress} in progress\n🚧 ${blocked} blocked\n🐛 ${bugs} bugs tracked\n\nGreat momentum from the team this sprint! Ping me if you need details on any specific items. 💪`;
@@ -272,20 +616,20 @@ function generateMockReport(type: string, tone: string, issues: JiraIssue[], spr
     }
 
     if (type === 'release_notes') {
-        const completedBugs = issues.filter(i => i.status === 'Done' && i.issueType === 'Bug');
-        const completedFeatures = issues.filter(i => i.status === 'Done' && i.issueType !== 'Bug');
-        return `## Release Notes — ${sprint}\n\n### ✨ Features & Improvements\n${completedFeatures.map(i => `- **[${i.key}]** ${i.summary}`).join('\n') || '- No feature completions this period'}\n\n### 🐛 Bug Fixes\n${completedBugs.map(i => `- **[${i.key}]** ${i.summary}`).join('\n') || '- No bug fixes this period'}`;
+        const completedBugs = issues.filter((issue) => issue.status === 'Done' && issue.issueType === 'Bug');
+        const completedFeatures = issues.filter((issue) => issue.status === 'Done' && issue.issueType !== 'Bug');
+        return `## Release Notes — ${sprint}\n\n### ✨ Features & Improvements\n${completedFeatures.map((issue) => `- **[${issue.key}]** ${issue.summary}`).join('\n') || '- No feature completions this period'}\n\n### 🐛 Bug Fixes\n${completedBugs.map((issue) => `- **[${issue.key}]** ${issue.summary}`).join('\n') || '- No bug fixes this period'}`;
     }
 
     if (type === 'blockers_summary') {
-        const blockedIssues = issues.filter(i => i.status === 'Blocked');
-        return `## Blockers Summary — ${sprint}\n\n${blockedIssues.length === 0 ? '✅ No blocked tickets currently.' : blockedIssues.map(i => `### 🚧 [${i.key}] ${i.summary}\n- **Assignee:** ${i.assignee?.displayName || 'Unassigned'}\n- **Blocked for:** ${i.timeInCurrentStatus} days\n- **Recommended action:** Review with ${i.assignee?.displayName || 'assignee'} and escalate dependencies`).join('\n\n')}`;
+        const blockedIssues = issues.filter((issue) => issue.status === 'Blocked');
+        return `## Blockers Summary — ${sprint}\n\n${blockedIssues.length === 0 ? '✅ No blocked tickets currently.' : blockedIssues.map((issue) => `### 🚧 [${issue.key}] ${issue.summary}\n- **Assignee:** ${issue.assignee?.displayName || 'Unassigned'}\n- **Blocked for:** ${issue.timeInCurrentStatus} days\n- **Recommended action:** Review with ${issue.assignee?.displayName || 'assignee'} and escalate dependencies`).join('\n\n')}`;
     }
 
     if (type === 'slide_speaker_notes') {
-        return `Highlight sprint progress in one line, name the top risk clearly, and end with one concrete next action for this audience.`;
+        return 'Highlight sprint progress in one line, name the top risk clearly, and end with one concrete next action for this audience.';
     }
 
     // Default: sprint summary
-    return `## Sprint Summary — ${sprint}\n\n### 📊 At a Glance\n- **Completed:** ${done} tickets\n- **In Progress:** ${inProgress} tickets  \n- **Blocked:** ${blocked} tickets\n- **Bugs resolved:** ${bugs > 0 ? bugs : 'N/A'}\n\n### ✅ Key Completions\n${issues.filter(i => i.status === 'Done').slice(0, 5).map(i => `- **[${i.key}]** ${i.summary}`).join('\n')}\n\n### 🔄 In Flight\n${issues.filter(i => i.status === 'In Progress').map(i => `- **[${i.key}]** ${i.summary} (${i.assignee?.displayName || 'Unassigned'})`).join('\n') || '- None'}\n\n### ⚠️ Needs Attention\n${blocked > 0 ? issues.filter(i => i.status === 'Blocked').map(i => `- **[${i.key}]** ${i.summary} — blocked for ${i.timeInCurrentStatus}d`).join('\n') : '- No blockers currently'}\n\n### 📌 Next Steps\n- Resolve blockers for SSO integration\n- Complete QA on remaining Policy Engine tickets\n- Prepare release candidates for upcoming sprint review`;
+    return `## Sprint Summary — ${sprint}\n\n### 📊 At a Glance\n- **Completed:** ${done} tickets\n- **In Progress:** ${inProgress} tickets  \n- **Blocked:** ${blocked} tickets\n- **Bugs resolved:** ${bugs > 0 ? bugs : 'N/A'}\n\n### ✅ Key Completions\n${issues.filter((issue) => issue.status === 'Done').slice(0, 5).map((issue) => `- **[${issue.key}]** ${issue.summary}`).join('\n')}\n\n### 🔄 In Flight\n${issues.filter((issue) => issue.status === 'In Progress').map((issue) => `- **[${issue.key}]** ${issue.summary} (${issue.assignee?.displayName || 'Unassigned'})`).join('\n') || '- None'}\n\n### ⚠️ Needs Attention\n${blocked > 0 ? issues.filter((issue) => issue.status === 'Blocked').map((issue) => `- **[${issue.key}]** ${issue.summary} — blocked for ${issue.timeInCurrentStatus}d`).join('\n') : '- No blockers currently'}\n\n### 📌 Next Steps\n- Resolve blockers for SSO integration\n- Complete QA on remaining Policy Engine tickets\n- Prepare release candidates for upcoming sprint review`;
 }

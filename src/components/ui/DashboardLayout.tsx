@@ -18,7 +18,7 @@ async function fetchSavedViews() {
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const {
         setIssues, setLoading, setLastSynced, setTotalIssues,
-        setDemoMode, setActiveSprints, setSavedViews, demoMode, sidebarHidden,
+        setDemoMode, setActiveSprints, setSavedViews, setHasUnreadSyncBriefing, demoMode, sidebarHidden,
     } = useAppStore();
     const [syncing, setSyncing] = useState(false);
 
@@ -30,13 +30,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             setLastSynced(data.lastSynced);
             setTotalIssues(data.total || data.issues?.length || 0);
             setDemoMode(data.demoMode || false);
+            setHasUnreadSyncBriefing(Boolean(data.hasUnreadSyncBriefing));
             if (data.sprints) setActiveSprints(data.sprints);
         } catch (e) {
             console.error('Failed to load issues:', e);
         } finally {
             setLoading(false);
         }
-    }, [setIssues, setLoading, setLastSynced, setTotalIssues, setDemoMode, setActiveSprints]);
+    }, [setIssues, setLoading, setLastSynced, setTotalIssues, setDemoMode, setActiveSprints, setHasUnreadSyncBriefing]);
 
     const loadViews = useCallback(async () => {
         try {

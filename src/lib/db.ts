@@ -61,7 +61,12 @@ function initSchema(db: Database.Database) {
       url TEXT,
       changelog TEXT DEFAULT '[]',
       synced_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-      raw_json TEXT
+      raw_json TEXT,
+      doc_score INTEGER DEFAULT NULL,
+      doc_grade TEXT DEFAULT NULL,
+      doc_missing_fields TEXT DEFAULT NULL,
+      doc_ai_rating TEXT DEFAULT NULL,
+      doc_ai_rated_at TEXT DEFAULT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
@@ -121,6 +126,34 @@ function initSchema(db: Database.Database) {
       sprint_name TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS sync_diffs (
+      id TEXT PRIMARY KEY,
+      synced_at TEXT NOT NULL,
+      newly_blocked TEXT NOT NULL DEFAULT '[]',
+      newly_resolved TEXT NOT NULL DEFAULT '[]',
+      status_changes TEXT NOT NULL DEFAULT '[]',
+      new_tickets TEXT NOT NULL DEFAULT '[]',
+      removed_from_sprint TEXT NOT NULL DEFAULT '[]',
+      sprint_name TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sync_diffs_synced_at ON sync_diffs(synced_at);
+
+    CREATE TABLE IF NOT EXISTS ticket_docs (
+      id TEXT PRIMARY KEY,
+      ticket_key TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      audiences TEXT NOT NULL DEFAULT '[]',
+      summary TEXT,
+      short_description TEXT,
+      how_to_use TEXT,
+      impact TEXT,
+      audience_notes TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ticket_docs_ticket_key ON ticket_docs(ticket_key);
+    CREATE INDEX IF NOT EXISTS idx_ticket_docs_generated_at ON ticket_docs(generated_at);
+
     CREATE TABLE IF NOT EXISTS status_reports (
       id TEXT PRIMARY KEY,
       generated_at TEXT,
@@ -164,6 +197,28 @@ function initSchema(db: Database.Database) {
       next_run_at TEXT
     );
   `);
+
+    const syncDiffColumns = db.prepare(`PRAGMA table_info(sync_diffs)`).all() as { name: string }[];
+    if (!syncDiffColumns.some((column) => column.name === 'removed_from_sprint')) {
+        db.exec(`ALTER TABLE sync_diffs ADD COLUMN removed_from_sprint TEXT NOT NULL DEFAULT '[]'`);
+    }
+
+    const issueColumns = db.prepare(`PRAGMA table_info(issues)`).all() as { name: string }[];
+    if (!issueColumns.some((column) => column.name === 'doc_score')) {
+        db.exec(`ALTER TABLE issues ADD COLUMN doc_score INTEGER DEFAULT NULL`);
+    }
+    if (!issueColumns.some((column) => column.name === 'doc_grade')) {
+        db.exec(`ALTER TABLE issues ADD COLUMN doc_grade TEXT DEFAULT NULL`);
+    }
+    if (!issueColumns.some((column) => column.name === 'doc_missing_fields')) {
+        db.exec(`ALTER TABLE issues ADD COLUMN doc_missing_fields TEXT DEFAULT NULL`);
+    }
+    if (!issueColumns.some((column) => column.name === 'doc_ai_rating')) {
+        db.exec(`ALTER TABLE issues ADD COLUMN doc_ai_rating TEXT DEFAULT NULL`);
+    }
+    if (!issueColumns.some((column) => column.name === 'doc_ai_rated_at')) {
+        db.exec(`ALTER TABLE issues ADD COLUMN doc_ai_rated_at TEXT DEFAULT NULL`);
+    }
 
     const statusReportColumns = db.prepare(`PRAGMA table_info(status_reports)`).all() as { name: string }[];
     if (!statusReportColumns.some((column) => column.name === 'is_auto')) {
