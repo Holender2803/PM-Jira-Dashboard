@@ -24,6 +24,15 @@ interface ReportScheduleConfig {
     nextRunAt: string | null;
 }
 
+interface StatusReportSummary {
+    id: string;
+    generatedAt: string;
+    audience: ReportScheduleAudience;
+    sprintName: string;
+    content: string;
+    isAuto: boolean;
+}
+
 const LOCAL_STORAGE_KEY = 'jira_dashboard_manual_credentials';
 const USD_FORMATTER = new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -88,6 +97,8 @@ export default function SettingsPage() {
     const [reportScheduleNextRunAt, setReportScheduleNextRunAt] = useState<string | null>(DEFAULT_REPORT_SCHEDULE.nextRunAt);
     const [reportScheduleBusy, setReportScheduleBusy] = useState(false);
     const [reportScheduleResult, setReportScheduleResult] = useState<string | null>(null);
+    const [reportRunBusy, setReportRunBusy] = useState(false);
+    const [recentStatusReports, setRecentStatusReports] = useState<StatusReportSummary[]>([]);
 
     useEffect(() => {
         setHydrated(true);
@@ -175,10 +186,22 @@ export default function SettingsPage() {
             }
         };
 
+        const loadStatusReports = async () => {
+            try {
+                const res = await fetch('/api/reports/status', { cache: 'no-store' });
+                if (!res.ok) return;
+                const data = await res.json() as StatusReportSummary[];
+                setRecentStatusReports(Array.isArray(data) ? data : []);
+            } catch {
+                // Keep status report list empty if unavailable.
+            }
+        };
+
         load();
         loadBugTrackingConfig();
         loadTeamConfig();
         loadReportSchedule();
+        loadStatusReports();
 
         const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
         if (stored) {
@@ -433,12 +456,42 @@ export default function SettingsPage() {
         }
     };
 
+    const runStatusReportNow = async () => {
+        setReportRunBusy(true);
+        setReportScheduleResult(null);
+
+        try {
+            const response = await fetch('/api/reports/status', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    audience: reportScheduleAudience,
+                    isAuto: false,
+                }),
+            });
+
+            const data = await response.json() as StatusReportSummary & { error?: string };
+            if (!response.ok || !data.id) {
+                setReportScheduleResult(`Generate failed: ${data.error || 'Unknown error'}`);
+                return;
+            }
+
+            setRecentStatusReports((current) => [data, ...current.filter((report) => report.id !== data.id)].slice(0, 10));
+            setReportScheduleResult(`Generated a ${data.audience} report for ${data.sprintName}.`);
+        } catch (error) {
+            setReportScheduleResult(`Generate failed: ${String(error)}`);
+        } finally {
+            setReportRunBusy(false);
+        }
+    };
+
     const scheduleLastRunLabel = reportScheduleLastRunAt
         ? new Date(reportScheduleLastRunAt).toLocaleString()
         : 'Not run yet';
     const scheduleNextRunLabel = reportScheduleNextRunAt
         ? new Date(reportScheduleNextRunAt).toLocaleString()
         : 'Not scheduled';
+    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local time';
 
     return (
         <div>
@@ -697,19 +750,65 @@ export default function SettingsPage() {
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' }}>
                             <div>Last run: {scheduleLastRunLabel}</div>
                             <div>Next run: {scheduleNextRunLabel}</div>
+                            <div>Timezone: {browserTimeZone}</div>
+                            <div>Trigger: reports are generated when the app performs a sync after the scheduled time.</div>
+                        </div>
+
+                        <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, background: 'var(--bg-elevated)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Schedule Preview</div>
+                            <div style={{ fontSize: 13, color: 'var(--text-primary)' }}>
+                                {reportScheduleEnabled
+                                    ? `${reportScheduleAudience.charAt(0).toUpperCase()}${reportScheduleAudience.slice(1)} report every ${reportScheduleDayOfWeek} at ${reportScheduleTime}.`
+                                    : 'Scheduled reporting is currently disabled.'}
+                            </div>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                Use “Generate now” to validate the prompt quality and delivery format before relying on the weekly schedule.
+                            </div>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                             <button className="btn btn-primary btn-sm" onClick={saveReportSchedule} disabled={reportScheduleBusy}>
                                 {reportScheduleBusy ? 'Saving...' : 'Save Scheduled Reports'}
                             </button>
+                            <button className="btn btn-secondary btn-sm" onClick={runStatusReportNow} disabled={reportRunBusy}>
+                                {reportRunBusy ? 'Generating...' : 'Generate Now'}
+                            </button>
                         </div>
 
                         {reportScheduleResult && (
-                            <div style={{ fontSize: 12, color: reportScheduleResult.startsWith('Save failed') ? 'var(--danger)' : 'var(--text-secondary)' }}>
+                            <div style={{ fontSize: 12, color: reportScheduleResult.startsWith('Save failed') || reportScheduleResult.startsWith('Generate failed') ? 'var(--danger)' : 'var(--text-secondary)' }}>
                                 {reportScheduleResult}
                             </div>
                         )}
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
+                            <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)' }}>Recent Reports</div>
+                            {recentStatusReports.length === 0 ? (
+                                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                                    No status reports generated yet.
+                                </div>
+                            ) : recentStatusReports.slice(0, 4).map((report) => (
+                                <div key={report.id} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, background: 'rgba(15,23,42,0.35)', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                                        <div style={{ fontSize: 13, fontWeight: 600 }}>{report.sprintName}</div>
+                                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                            <span className="badge" style={{ background: 'rgba(99,102,241,0.14)', color: 'var(--accent-light)', border: '1px solid rgba(99,102,241,0.28)' }}>
+                                                {report.audience}
+                                            </span>
+                                            <span className="badge" style={{ background: report.isAuto ? 'rgba(16,185,129,0.14)' : 'rgba(245,158,11,0.14)', color: report.isAuto ? '#10b981' : '#fbbf24', border: `1px solid ${report.isAuto ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}` }}>
+                                                {report.isAuto ? 'Auto' : 'Manual'}
+                                            </span>
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                                {new Date(report.generatedAt).toLocaleString()}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div style={{ fontSize: 12, color: 'var(--text-secondary)', whiteSpace: 'pre-wrap' }}>
+                                        {report.content.slice(0, 220)}{report.content.length > 220 ? '…' : ''}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 </div>
 

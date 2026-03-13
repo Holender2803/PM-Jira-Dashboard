@@ -270,6 +270,110 @@ tbody tr:focus-within .row-hover-action {
   text-decoration: none;
   border: 1px solid transparent;
 }
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-section + .sidebar-section {
+  margin-top: 10px;
+}
+
+.sidebar-section-toggle {
+  width: calc(100% - 16px);
+  margin: 0 8px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sidebar-section-toggle:hover,
+.sidebar-section-toggle.active {
+  color: var(--text-secondary);
+}
+
+.sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.72);
+  display: flex;
+  justify-content: flex-end;
+  z-index: 1200;
+}
+
+.sheet-panel {
+  width: min(620px, 100vw);
+  height: 100vh;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -12px 0 32px rgba(2, 6, 23, 0.5);
+}
+
+.sheet-header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.sheet-header h2 {
+  font-size: 18px;
+  margin-bottom: 4px;
+}
+
+.sheet-header p {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.sheet-body {
+  padding: 20px 24px 28px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sheet-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sheet-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.sheet-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+@media (max-width: 900px) {
+  .sheet-grid {
+    grid-template-columns: 1fr;
+  }
+}
 .nav-item:hover {
   background: var(--bg-hover);
   color: var(--text-primary);

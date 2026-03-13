@@ -4,12 +4,14 @@ import { useAppStore, useFilteredIssues } from '@/store/app-store';
 import { CLOSED_STATUSES, ACTIVE_STATUSES } from '@/lib/workflow';
 import { StatCard, ProgressBar } from '@/components/ui/Badges';
 import FilterBar from '@/components/filters/FilterBar';
+import WorkspaceCompass from '@/components/onboarding/WorkspaceCompass';
 import {
     StatusChart, IssueTypePieChart, WorkflowFunnelChart, AssigneeChart
 } from '@/components/charts/DashboardCharts';
 import IssueTable from '@/components/tables/IssueTable';
 import IssueKeyButton from '@/components/tables/IssueKeyButton';
 import PmGuideTooltip from '@/components/PmGuideTooltip';
+import CommandCenterSummary from '@/components/command-center/CommandCenterSummary';
 import { CheckCircle, AlertTriangle, TrendingUp, Zap, Bug, Clock, Layers, RefreshCw, Minimize2, Maximize2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { formatTimeForDisplay } from '@/lib/time';
@@ -356,7 +358,7 @@ No lists, no headers, plain sentences only.
             <div className="page-header" style={{ paddingBottom: 20 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 16 }}>
                     <div>
-                        <h1 className="page-title">📊 PM Overview</h1>
+                        <h1 className="page-title">🧭 PM Command Center</h1>
                         <p className="page-subtitle">
                             {activeSprint ? `${activeSprint.name} · ` : ''}{sprintIssues.length} sprint tickets
                             {lastSynced && <span style={{ marginLeft: 8, opacity: 0.6 }}>· Updated {formatTimeForDisplay(lastSynced, { includeZone: true })}</span>}
@@ -447,6 +449,8 @@ No lists, no headers, plain sentences only.
                     </div>
                 </div>
 
+                <WorkspaceCompass compact />
+
                 {/* Sprint Health Metrics */}
                 {activeSprint && (
                     <div>
@@ -495,6 +499,8 @@ No lists, no headers, plain sentences only.
                         <StatCard label="Release Ready" value={releaseReady.length} color="#06b6d4" icon={<TrendingUp size={16} />} onClick={() => router.push('/workflow')} />
                     </div>
                 </div>
+
+                <CommandCenterSummary />
 
                 {/* Charts */}
                 <div className="dashboard-grid grid-2">

@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { runMigrations } from './run-migrations';
 
 const DB_PATH = process.env.DATABASE_PATH || './data/jira-dashboard.db';
 const absolutePath = path.resolve(process.cwd(), DB_PATH);
@@ -19,6 +20,7 @@ export function getDb(): Database.Database {
         db.pragma('journal_mode = WAL');
         db.pragma('foreign_keys = ON');
         initSchema(db);
+        runMigrations(db);
     }
     return db;
 }
