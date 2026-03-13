@@ -254,6 +254,47 @@ function buildSyncDiffSummary(diff: SyncDiffPayload): string {
     ].join('\n');
 }
 
+function buildIssueDigest(issues: JiraIssue[]): string {
+    if (issues.length === 0) {
+        return 'Ticket digest: no Jira tickets were provided.';
+    }
+
+    const statusCounts = new Map<string, number>();
+    const typeCounts = new Map<string, number>();
+    let blocked = 0;
+    let done = 0;
+
+    for (const issue of issues) {
+        statusCounts.set(issue.status, (statusCounts.get(issue.status) || 0) + 1);
+        typeCounts.set(issue.issueType, (typeCounts.get(issue.issueType) || 0) + 1);
+        if (issue.status === 'Blocked') blocked += 1;
+        if (issue.status === 'Done') done += 1;
+    }
+
+    const topStatuses = [...statusCounts.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 5)
+        .map(([status, count]) => `${status}: ${count}`)
+        .join(', ');
+    const topTypes = [...typeCounts.entries()]
+        .sort((left, right) => right[1] - left[1])
+        .slice(0, 5)
+        .map(([type, count]) => `${type}: ${count}`)
+        .join(', ');
+    const topBlockers = issues
+        .filter((issue) => issue.status === 'Blocked')
+        .slice(0, 5)
+        .map((issue) => `${issue.key} (${issue.summary})`)
+        .join(', ') || 'None';
+
+    return [
+        `Ticket digest: ${issues.length} ticket(s), ${done} done, ${blocked} blocked.`,
+        `Status mix: ${topStatuses || 'N/A'}`,
+        `Type mix: ${topTypes || 'N/A'}`,
+        `Top blockers: ${topBlockers}`,
+    ].join('\n');
+}
+
 function reportTypeLabel(type: string): string {
     return type.replace(/_/g, ' ').replace(/\b\w/g, (value) => value.toUpperCase());
 }
@@ -388,13 +429,14 @@ ${issue.description ? `Description: ${extractDescriptionText(issue.description).
 
         const formatGuide = (isMorningBriefing || isSyncBriefing) ? '' : CONFLUENCE_FORMAT_GUIDE;
         const maxTokens = MAX_TOKENS[type] || 1500;
-        const effectiveTemperature = (isMorningBriefing || isSyncBriefing) ? 0.3 : 0.7;
+        const effectiveTemperature = (isMorningBriefing || isSyncBriefing) ? 0.25 : 0.45;
         const criticalMorningPrefix = isMorningBriefing
             ? 'CRITICAL: Output exactly 3 sentences. Stop after the third sentence. Do not output ticket keys, lists, headers, or any text after the third sentence ends with a period.'
             : '';
         const additionalInstructions = (!isSyncBriefing && customInstructions)
             ? `ADDITIONAL INSTRUCTIONS: ${customInstructions}`
             : '';
+        const issueDigest = isSyncBriefing ? '' : buildIssueDigest(issues);
 
         const systemPrompt = `${criticalMorningPrefix ? `${criticalMorningPrefix}\n` : ''}You are a productivity assistant specialized in helping Product Managers communicate sprint progress, delivery status, and team updates.
 
@@ -407,13 +449,20 @@ TONE: ${TONE_INSTRUCTIONS[tone] || TONE_INSTRUCTIONS.pm_internal}
 TASK: ${REPORT_PROMPTS[type] || REPORT_PROMPTS.selected_tickets}
 ${formatGuide}
 
+GROUNDING RULES:
+- Use only the Jira data provided in this prompt.
+- Do not invent metrics, dates, owners, blockers, causes, or outcomes.
+- Only mention ticket keys that appear in the provided Jira context.
+- If evidence is thin or missing, say so briefly instead of filling gaps.
+- Keep claims proportional to the data; avoid overconfident language.
+
 ${additionalInstructions}`;
 
         const userPrompt = isMorningBriefing
             ? (customInstructions || 'Write the 3-sentence morning briefing now. No lists, no headers, plain sentences only.')
             : isSyncBriefing
                 ? `Here is the computed sync diff summary:\n\n${syncDiffSummary}\n\nGenerate the sync briefing now.`
-                : `Here are the Jira tickets to analyze:\n\n${issueContext}\n\nPlease generate the requested ${type.replace('_', ' ')}.`;
+                : `Here is a summary of the Jira ticket set:\n\n${issueDigest}\n\nHere are the Jira tickets to analyze:\n\n${issueContext}\n\nPlease generate the requested ${type.replace('_', ' ')}.`;
 
         let content: string;
 

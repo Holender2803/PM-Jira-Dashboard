@@ -2,6 +2,11 @@ import OpenAI from 'openai';
 import getDb from '@/lib/db';
 import { queryIssues, getActiveSprints } from '@/lib/issue-store';
 import { calculateWorkflowMetrics, getReopenRates } from '@/lib/analytics';
+import { listDecisions } from '@/lib/pm-os/repositories/decisions-repo';
+import { listInitiatives } from '@/lib/pm-os/repositories/initiatives-repo';
+import { listPmTasks } from '@/lib/pm-os/repositories/pm-tasks-repo';
+import { attachInitiativeHealth } from '@/lib/pm-os/services/initiative-health-service';
+import { getStrategyRiskAlerts } from '@/lib/pm-os/services/risk-service';
 import { CLOSED_STATUSES } from '@/lib/workflow';
 
 export type ReportAudience = 'team' | 'executive' | 'client';
@@ -64,6 +69,13 @@ interface ReportData {
         deliveryEfficiency: number;
         carryOverCost: number | null;
     };
+}
+
+interface PmOperatingContext {
+    activeInitiatives: string[];
+    overdueTasks: string[];
+    draftDecisions: string[];
+    strategyRisks: string[];
 }
 
 export interface StatusReportRecord {
@@ -291,7 +303,78 @@ function collectReportData(): ReportData {
     };
 }
 
-function buildAudienceInstructions(audience: ReportAudience, data: ReportData): string {
+function collectPmOperatingContext(): PmOperatingContext {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const activeInitiatives = attachInitiativeHealth(
+        listInitiatives().filter((initiative) => !['done', 'archived'].includes(initiative.status))
+    )
+        .slice(0, 5)
+        .map((initiative) => {
+            const progress = initiative.health.totalLinkedIssues > 0
+                ? `${initiative.health.doneLinkedIssues}/${initiative.health.totalLinkedIssues} done`
+                : 'no Jira links';
+            return `${initiative.title} (${initiative.status}, ${progress})`;
+        });
+
+    const overdueTasks = listPmTasks()
+        .filter((task) => task.status !== 'done' && Boolean(task.dueDate))
+        .filter((task) => {
+            const dueDate = task.dueDate ? new Date(task.dueDate) : null;
+            if (!dueDate || Number.isNaN(dueDate.getTime())) return false;
+            dueDate.setHours(0, 0, 0, 0);
+            return dueDate.getTime() < today.getTime();
+        })
+        .slice(0, 5)
+        .map((task) => `${task.title}${task.initiativeTitle ? ` · ${task.initiativeTitle}` : ''}`);
+
+    const draftDecisions = listDecisions({ status: 'draft' })
+        .slice(0, 5)
+        .map((decision) => `${decision.title}${decision.primaryInitiativeTitle ? ` · ${decision.primaryInitiativeTitle}` : ''}`);
+
+    const strategyRisks = getStrategyRiskAlerts()
+        .slice(0, 5)
+        .map((risk) => `${risk.title} (${risk.severity})`);
+
+    return {
+        activeInitiatives,
+        overdueTasks,
+        draftDecisions,
+        strategyRisks,
+    };
+}
+
+function buildPmOperatingContextInstructions(audience: ReportAudience, context: PmOperatingContext): string {
+    const activeInitiatives = context.activeInitiatives.join('\n') || '- None';
+    const overdueTasks = context.overdueTasks.join('\n') || '- None';
+    const draftDecisions = context.draftDecisions.join('\n') || '- None';
+    const strategyRisks = context.strategyRisks.join('\n') || '- None';
+
+    if (audience === 'client') {
+        return [
+            'PM operating context (internal only, do not expose internal names directly):',
+            'Use this only to sharpen risk framing and next steps.',
+            `Active initiatives in flight: ${context.activeInitiatives.length}.`,
+            'Strategy risks:',
+            strategyRisks,
+        ].join('\n');
+    }
+
+    return [
+        'PM operating context:',
+        'Active initiatives:',
+        activeInitiatives,
+        'Overdue PM tasks:',
+        overdueTasks,
+        'Draft decisions:',
+        draftDecisions,
+        'Strategy risks:',
+        strategyRisks,
+    ].join('\n');
+}
+
+function buildAudienceInstructions(audience: ReportAudience, data: ReportData, pmContext: PmOperatingContext): string {
     const resolvedForTeam = data.resolvedLast30Days
         .slice(0, 12)
         .map((issue) => `- ${issue.key}: ${issue.summary} (${issue.type}, ${issue.assignee})`)
@@ -355,6 +438,7 @@ function buildAudienceInstructions(audience: ReportAudience, data: ReportData): 
             blockersForExecutive,
             'Active epics:',
             epicLines,
+            buildPmOperatingContextInstructions(audience, pmContext),
         ].join('\n');
     }
 
@@ -374,6 +458,7 @@ function buildAudienceInstructions(audience: ReportAudience, data: ReportData): 
             blockersForClient,
             'Active epics:',
             epicLines,
+            buildPmOperatingContextInstructions(audience, pmContext),
         ].join('\n');
     }
 
@@ -392,10 +477,11 @@ function buildAudienceInstructions(audience: ReportAudience, data: ReportData): 
         blockersForTeam,
         'Active epics:',
         epicLines,
+        buildPmOperatingContextInstructions(audience, pmContext),
     ].join('\n');
 }
 
-function generateFallbackReport(data: ReportData, audience: ReportAudience): string {
+function generateFallbackReport(data: ReportData, audience: ReportAudience, pmContext: PmOperatingContext): string {
     const resolvedLine = data.resolvedLast30Days
         .slice(0, 5)
         .map((issue) =>
@@ -435,6 +521,20 @@ function generateFallbackReport(data: ReportData, audience: ReportAudience): str
             ? `We completed ${data.sprint.done} sprint commitments and we are building the next set of improvements with ${data.sprint.inProgress} items currently in progress.`
             : `Sprint ${data.sprint.name} is tracking ${data.sprint.done}/${data.sprint.committed} completed with ${data.sprint.blocked} blockers and ${data.sprint.inProgress} in progress.`;
 
+    const nextActionLines = audience === 'client'
+        ? [
+            '- Keep focus on the highest-impact in-progress work.',
+            '- Resolve delivery dependencies early to protect timeline confidence.',
+            '- Confirm the next customer-facing milestone and communication window.',
+        ].join('\n')
+        : [
+            pmContext.strategyRisks[0] ? `- Top strategic watchout: ${pmContext.strategyRisks[0]}.` : null,
+            pmContext.draftDecisions[0] ? `- Close the open product decision: ${pmContext.draftDecisions[0]}.` : null,
+            pmContext.overdueTasks[0] ? `- Follow up on overdue PM work: ${pmContext.overdueTasks[0]}.` : null,
+            '- Keep focus on highest-impact in-progress work.',
+            '- Resolve blocker dependencies early in the sprint.',
+        ].filter(Boolean).join('\n');
+
     return `## Sprint Status — ${data.sprint.name}
 ### 🎯 Executive Summary
 ${executiveSummary}
@@ -449,23 +549,26 @@ ${inProgressLine}
 ${blockerLine}
 
 ### 📋 Next Steps
-- Keep focus on highest-impact in-progress work.
-- Resolve blocker dependencies early in the sprint.
-- Confirm sprint-ready priorities for the upcoming planning cycle.`;
+${nextActionLines}`;
 }
 
-async function generateStatusReportContent(audience: ReportAudience, data: ReportData): Promise<string> {
+async function generateStatusReportContent(
+    audience: ReportAudience,
+    data: ReportData,
+    pmContext: PmOperatingContext
+): Promise<string> {
     const aiConfig = resolveAIClientConfig();
     if (!aiConfig) {
-        return generateFallbackReport(data, audience);
+        return generateFallbackReport(data, audience, pmContext);
     }
 
     const systemPrompt = `You are a PM reporting assistant. Generate a high-quality sprint status report based only on provided data.
 Follow all audience and formatting instructions exactly.
-Do not invent metrics or tickets.
-If data is missing, acknowledge it briefly and continue.`;
+Do not invent metrics, tickets, reasons, or outcomes.
+If data is missing, acknowledge it briefly and continue.
+Use PM operating context only when it improves prioritization, risk framing, or next-step clarity.`;
 
-    const userPrompt = buildAudienceInstructions(audience, data);
+    const userPrompt = buildAudienceInstructions(audience, data, pmContext);
 
     const openai = new OpenAI({
         apiKey: aiConfig.apiKey,
@@ -484,7 +587,7 @@ If data is missing, acknowledge it briefly and continue.`;
 
     const content = completion.choices[0]?.message?.content?.trim();
     if (!content) {
-        return generateFallbackReport(data, audience);
+        return generateFallbackReport(data, audience, pmContext);
     }
     return content;
 }
@@ -506,7 +609,8 @@ export async function createStatusReport(options: CreateStatusReportOptions): Pr
     const audience = normalizeReportAudience(options.audience);
     const isAuto = Boolean(options.isAuto);
     const data = collectReportData();
-    const content = await generateStatusReportContent(audience, data);
+    const pmContext = collectPmOperatingContext();
+    const content = await generateStatusReportContent(audience, data, pmContext);
     const generatedAt = new Date().toISOString();
     const id = `status-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 

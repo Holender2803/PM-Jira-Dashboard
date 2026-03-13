@@ -2,6 +2,7 @@
 import { useEffect, useCallback, useState } from 'react';
 import { useAppStore } from '@/store/app-store';
 import Sidebar from '@/components/ui/Sidebar';
+import PageGuideDock from '@/components/ui/PageGuideDock';
 
 async function fetchIssues() {
     const res = await fetch('/api/jira/issues', { cache: 'no-store' });
@@ -72,6 +73,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {!sidebarHidden && <Sidebar onRefresh={handleRefresh} syncing={syncing} />}
             <div className="main-content">
                 {children}
+                <PageGuideDock />
             </div>
         </div>
     );
